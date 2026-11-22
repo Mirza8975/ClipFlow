@@ -23,18 +23,18 @@ _load_dotenv()
 
 
 def env(key: str, default=None):
-    """Support CLIPFLOW_* as well as PEAKCUT_* transparently."""
+    """Support CLIPFLOW_* as well as PEAKCUT_* transparently with exact-match precedence."""
+    if key in os.environ:
+        return os.environ[key]
     if key.startswith("PEAKCUT_"):
         cf_key = "CLIPFLOW_" + key[8:]
         if cf_key in os.environ:
             return os.environ[cf_key]
     elif key.startswith("CLIPFLOW_"):
         pk_key = "PEAKCUT_" + key[9:]
-        if key in os.environ:
-            return os.environ[key]
         if pk_key in os.environ:
             return os.environ[pk_key]
-    return os.environ.get(key, default)
+    return default
 
 
 _kept: dict = {}
