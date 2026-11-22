@@ -1,0 +1,33 @@
+<svg width="220" height="220" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cf-bg" x1="0" y1="0" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="cf-grad1" x1="40" y1="40" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+    <linearGradient id="cf-cyan" x1="40" y1="110" x2="180" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <!-- Background squircle -->
+  <rect width="220" height="220" rx="54" fill="url(#cf-bg)"/>
+  <rect x="2" y="2" width="216" height="216" rx="52" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
+  
+  <!-- Waveform & Play Action representing ClipFlow -->
+  <!-- Waveform Bars -->
+  <rect x="44" y="92" width="12" height="36" rx="6" fill="url(#cf-cyan)" opacity="0.75"/>
+  <rect x="64" y="68" width="12" height="84" rx="6" fill="url(#cf-cyan)" opacity="0.9"/>
+  <rect x="84" y="48" width="12" height="124" rx="6" fill="url(#cf-grad1)"/>
+
+  <!-- Play / Cutter Polygon -->
+  <path d="M114 62C114 55.8 120.7 52.0 126.0 55.1L174.0 83.1C179.3 86.2 179.3 93.8 174.0 96.9L126.0 124.9C120.7 128.0 114 124.2 114 118.0V62Z" fill="url(#cf-grad1)"/>
+  
+  <!-- Flow Tail Bottom -->
+  <path d="M114 140C114 135.6 117.6 132 122 132H162C166.4 132 170 135.6 170 140C170 144.4 166.4 148 162 148H122C117.6 148 114 144.4 114 140Z" fill="url(#cf-cyan)" opacity="0.9"/>
+  <path d="M114 162C114 157.6 117.6 154 122 154H146C150.4 154 154 157.6 154 162C154 166.4 150.4 170 146 170H122C117.6 170 114 166.4 114 162Z" fill="url(#cf-cyan)" opacity="0.65"/>
+</svg>

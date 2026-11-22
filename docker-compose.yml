@@ -1,0 +1,66 @@
+# ClipFlow on one server: the app, PostgreSQL, and Caddy for HTTPS.
+# Copy .env.example to .env, fill it in, then:  docker compose up -d --build
+# A server of its own: also set COMPOSE_PROFILES=own-https in .env. A shared server: see deploy/nginx-peakcut.conf.
+services:
+  db:
+    image: postgres:16-alpine
+    mem_limit: ${CLIPFLOW_DB_MEM_LIMIT:-${PEAKCUT_DB_MEM_LIMIT:-0}}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clipflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: clipflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipflow || pg_isready -U peakcut"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://clipflow:${POSTGRES_PASSWORD}@db:5432/clipflow
+      CLIPFLOW_PUBLIC_URL: https://${CLIPFLOW_DOMAIN:-${PEAKCUT_DOMAIN:?set CLIPFLOW_DOMAIN in .env}}
+      PEAKCUT_PUBLIC_URL: https://${CLIPFLOW_DOMAIN:-${PEAKCUT_DOMAIN:?set CLIPFLOW_DOMAIN in .env}}
+      # On a server everyone signs in. Set CLIPFLOW_ACCOUNTS=0 in .env only if the site is private to you.
+      CLIPFLOW_ACCOUNTS: ${CLIPFLOW_ACCOUNTS:-${PEAKCUT_ACCOUNTS:-1}}
+      PEAKCUT_ACCOUNTS: ${CLIPFLOW_ACCOUNTS:-${PEAKCUT_ACCOUNTS:-1}}
+    volumes:
+      - data:/data
+      - ./secrets:/secrets:ro
+      - ./.git:/app/.git:ro            # only to tell which version is running, for the update notice
+    ports: ["127.0.0.1:${CLIPFLOW_BIND_PORT:-${PEAKCUT_BIND_PORT:-8765}}:8765"]
+    mem_limit: ${CLIPFLOW_MEM_LIMIT:-${PEAKCUT_MEM_LIMIT:-0}}
+    memswap_limit: ${CLIPFLOW_MEM_LIMIT:-${PEAKCUT_MEM_LIMIT:-0}}
+    cpus: ${CLIPFLOW_CPUS:-${PEAKCUT_CPUS:-0}}
+    cpu_shares: ${CLIPFLOW_CPU_SHARES:-${PEAKCUT_CPU_SHARES:-1024}}
+    oom_score_adj: ${CLIPFLOW_OOM_SCORE_ADJ:-${PEAKCUT_OOM_SCORE_ADJ:-0}}
+
+  # Only on a server ClipFlow has to itself: add COMPOSE_PROFILES=own-https to .env and Caddy handles HTTPS.
+  caddy:
+    profiles: ["own-https"]
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    ports: ["80:80", "443:443"]
+    environment:
+      PEAKCUT_DOMAIN: ${CLIPFLOW_DOMAIN:-${PEAKCUT_DOMAIN:-}}
+      CLIPFLOW_DOMAIN: ${CLIPFLOW_DOMAIN:-${PEAKCUT_DOMAIN:-}}
+    volumes:
+      - ./deploy/${CLIPFLOW_CADDYFILE:-${PEAKCUT_CADDYFILE:-Caddyfile}}:/etc/caddy/Caddyfile:ro
+      - ./secrets:/secrets:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  data:
+  caddy_data:
+  caddy_config:
