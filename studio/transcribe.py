@@ -319,7 +319,6 @@ def _decode_remote(pieces: list, lang: str = fetch_model.DEFAULT) -> list:
 def transcribe(audio: np.ndarray, on_progress=None, lang: str = fetch_model.DEFAULT) -> list:
     """Returns [{'w': word, 's': start_sec, 'e': end_sec}, ...] for the whole audio, heard as `lang`.
     Speech is cut at quiet moments into 12-24 s pieces; silent pieces are skipped."""
-    global _remote_down_until
     lang = lang if fetch_model.known(lang) else fetch_model.DEFAULT
     words = []
     todo = []

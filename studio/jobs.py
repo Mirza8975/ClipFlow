@@ -890,7 +890,7 @@ def _run_job(job):
     renders.shutdown(wait=False)
     ahead.shutdown(wait=False)
     fetch.shutdown(wait=False)
-    del audio
+    audio = None
     clips = job["clips"]
     job["ai"] = {"model": model, "tokens": tokens, "log": notes[-5:],
                  "note": "The AI was unavailable, so clips were picked by loudness only." if clips and not model else ""}
