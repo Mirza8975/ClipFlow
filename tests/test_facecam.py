@@ -51,7 +51,7 @@ try:
 
     # ---- a video with no webcam in it: nothing that stays still, so nothing is found
     plain = os.path.join(work, "plain.mp4")
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", NOISE, "-frames:v", FRAMES,
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "nullsrc=s=1280x720:r=25,noise=alls=80:allf=t", "-frames:v", FRAMES,
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", plain], check=True)
     check("a video with nothing still in it finds no webcam", (facecam.detect(plain) or {}).get("conf", "none"), "none")
 
