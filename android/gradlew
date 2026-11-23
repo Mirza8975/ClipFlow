@@ -1,0 +1,48 @@
+#!/usr/bin/env sh
+
+# -----------------------------------------------------------------------------
+# Gradle Startup Script for UN*X
+# -----------------------------------------------------------------------------
+
+# Attempt to set APP_HOME
+APP_HOME=$( cd -P -- "$(dirname -- "$0")" && pwd -P )
+
+# Default Java options
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+# Find java
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        JAVACMD="$JAVA_HOME/jre/sh/java"
+    else
+        JAVACMD="$JAVA_HOME/bin/java"
+    fi
+else
+    JAVACMD="java"
+fi
+
+# Fallback to system gradle if available and java is not directly executable
+if ! command -v "$JAVACMD" >/dev/null 2>&1 && command -v gradle >/dev/null 2>&1; then
+    exec gradle "$@"
+fi
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+# If wrapper jar is not present, check if system gradle exists
+if [ ! -f "$CLASSPATH" ]; then
+    if command -v gradle >/dev/null 2>&1; then
+        exec gradle "$@"
+    else
+        # Try to download wrapper jar using curl or wget
+        mkdir -p "$APP_HOME/gradle/wrapper"
+        WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+        if command -v curl >/dev/null 2>&1; then
+            curl -sLo "$CLASSPATH" "$WRAPPER_URL" 2>/dev/null || true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$CLASSPATH" "$WRAPPER_URL" 2>/dev/null || true
+        fi
+    fi
+fi
+
+# Execute Gradle
+exec "$JAVACMD" $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_gravity="top"
+        android:max="100"
+        android:progressTint="@color/accent_blue"
+        android:visibility="gone" />
+
+    <!-- Error state overlay -->
+    <include
+        android:id="@+id/layoutError"
+        layout="@layout/view_error"
+        android:visibility="gone" />
+
+    <!-- Server configuration overlay -->
+    <include
+        android:id="@+id/layoutServerConfig"
+        layout="@layout/view_server_config"
+        android:visibility="visible" />
+
+    <!-- Floating server settings button (visible when webview is loaded) -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabSettings"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:backgroundTint="@color/frame_dark"
+        app:tint="@color/text_primary"
+        app:borderWidth="1dp"
+        app:backgroundTint="@color/frame_dark"
+        app:rippleColor="@color/accent_blue"
+        app:fabSize="mini"
+        android:contentDescription="@string/btn_change_server"
+        android:src="@android:drawable/ic_menu_preferences"
+        android:visibility="gone" />
+
+</FrameLayout>

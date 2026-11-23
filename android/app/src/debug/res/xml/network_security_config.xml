@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ClipFlow Debug / Local Testing Network Security Configuration:
+    Permits cleartext HTTP to enable local Wi-Fi connection to PC-hosted ClipFlow servers.
+    Application-layer validation (ServerConfigHelper) additionally restricts plain HTTP to RFC 1918 LAN IPs.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

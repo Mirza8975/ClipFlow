@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipFlow</string>
+    <string name="server_config_title">Connect to ClipFlow</string>
+    <string name="server_config_subtitle">Enter your PC\'s local Wi-Fi address or your production server domain.</string>
+    <string name="server_url_hint">e.g. http://192.168.1.50:8765</string>
+    <string name="btn_test_connection">Test Connection</string>
+    <string name="btn_connect">Connect</string>
+    <string name="btn_change_server">Change Server</string>
+    <string name="btn_retry">Retry</string>
+    <string name="connection_success">Connected! Server is healthy.</string>
+    <string name="connection_failed">Cannot reach server. Check Wi-Fi and port 8765.</string>
+    <string name="invalid_url_error">Please enter a valid HTTP or HTTPS URL.</string>
+    <string name="security_warning_http">Public domains must use HTTPS. Plain HTTP is only allowed for local Wi-Fi addresses.</string>
+    <string name="error_server_unreachable">Unable to reach the ClipFlow server.</string>
+    <string name="download_started">Downloading clip...</string>
+    <string name="press_again_to_exit">Press back again to exit</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ClipFlow Production Network Security Configuration:
+    Strictly disables all unencrypted cleartext HTTP traffic globally.
+    All production connections must use TLS / HTTPS with system trusted CAs.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
