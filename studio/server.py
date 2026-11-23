@@ -38,13 +38,17 @@ def _quiet(fn):
 
 app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None)
 WEB = config.ROOT / "web"
-OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
+OPEN = (
+    "/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/",
+    "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/manifest.json", "/sw.js", "/offline.html"
+)
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
          "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html"}
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
 CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
        "frame-src https://player.twitch.tv https://www.youtube-nocookie.com https://player.kick.com; "
+       "worker-src 'self'; manifest-src 'self'; "
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
@@ -466,6 +470,37 @@ def asset(name: str):
 @app.get("/favicon.ico")
 def favicon():
     return RedirectResponse("/brand/favicon.svg", 308)
+
+
+@app.get("/manifest.json")
+def manifest():
+    f = WEB / "manifest.json"
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/sw.js")
+def service_worker():
+    f = WEB / "sw.js"
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(
+        f,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Service-Worker-Allowed": "/",
+        },
+    )
+
+
+@app.get("/offline.html")
+def offline_page():
+    f = WEB / "offline.html"
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="text/html", headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ================================================================ sign up, sign in, sign out

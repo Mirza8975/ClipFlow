@@ -3,9 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0A0D14">
+<meta name="theme-color" content="#0D111A">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ClipFlow">
+<meta name="application-name" content="ClipFlow">
+<meta name="description" content="Cross-platform AI video clipping, caption generator, and social repurposing studio.">
 <title>ClipFlow - AI Highlight &amp; Vertical Clip Maker</title>
 <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg">
+<link rel="apple-touch-icon" href="/brand/icon-192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/brand/icon-512.png">
+<link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@300&family=Archivo+Black&family=Anton&family=Poppins:wght@800&display=swap" rel="stylesheet">
@@ -2546,7 +2555,10 @@ document.addEventListener("click", async e => {
       const tags = saved.fixed_description ? "" : (c.hashtags || []).filter(h => !(c.description || "").includes("#" + h)).map(h => "#" + h).join(" ");
       await navigator.clipboard.writeText([c.title, c.description, tags].filter(Boolean).join("\n\n")); return toast("Post text copied", "ok");
     }
-    if (a === "logout") { await api("/api/auth/logout", {method:"POST"}); location.href = "/"; return; }
+    if (a === "logout") {
+      try { if (navigator.serviceWorker?.controller) navigator.serviceWorker.controller.postMessage({type: "LOGOUT"}); } catch {}
+      await api("/api/auth/logout", {method:"POST"}); location.href = "/"; return;
+    }
     if (a === "pwsave") {
       await send("/api/auth/password", {current:$("#pw_cur")?.value || "", new:$("#pw_new").value});
       toast("Password changed. Other devices were signed out.", "ok"); return drawSettings();
@@ -2728,6 +2740,46 @@ $("#main").addEventListener("scroll", () => $(".topbar").classList.toggle("stuck
   checkNew(true);
   setInterval(async () => { try { S.status = await api("/api/status"); drawShell(); if (S.view === "overview") drawOverview(); checkNew(); } catch {} }, 15000);
 })();
+
+/* ============================================================ PWA Service Worker & Install */
+let _deferredInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  window._canInstallPWA = true;
+});
+window.addEventListener("appinstalled", () => {
+  _deferredInstallPrompt = null;
+  window._canInstallPWA = false;
+  toast("ClipFlow installed successfully!", "ok");
+});
+async function promptPWAInstall() {
+  if (_deferredInstallPrompt) {
+    _deferredInstallPrompt.prompt();
+    const { outcome } = await _deferredInstallPrompt.userChoice;
+    _deferredInstallPrompt = null;
+    return outcome === "accepted";
+  }
+  return false;
+}
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" })
+      .then(reg => {
+        reg.addEventListener("updatefound", () => {
+          const sw = reg.installing;
+          if (sw) {
+            sw.addEventListener("statechange", () => {
+              if (sw.state === "installed" && navigator.serviceWorker.controller) {
+                toast("New ClipFlow version ready. Refresh to update.", "ok");
+              }
+            });
+          }
+        });
+      })
+      .catch(err => console.warn("PWA Service Worker registration skipped:", err));
+  });
+}
 </script>
 </body>
 </html>
