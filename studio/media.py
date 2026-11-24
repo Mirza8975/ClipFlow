@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 
 from . import config, tools as _tools
 
@@ -325,9 +324,50 @@ def extract_audio(src: Path, wav: Path):
 
 
 def load_audio(wav: Path) -> np.ndarray:
-    data, sr = sf.read(str(wav), dtype="int16")
-    assert sr == 16000
-    return data
+    """Loads 16 kHz 16-bit mono audio into a 1D int16 NumPy array.
+
+    Uses standard library wave reader first (zero external C/native dependencies),
+    falls back to lazy soundfile if available, and bundled FFmpeg for non-standard formats.
+    """
+    path_str = str(wav)
+
+    # 1. Standard library wave module (pure Python, 0 native dependencies, cross-platform)
+    try:
+        import wave
+        with wave.open(path_str, "rb") as wf:
+            if wf.getnchannels() == 1 and wf.getsampwidth() == 2 and wf.getframerate() == 16000:
+                raw_frames = wf.readframes(wf.getnframes())
+                buf = raw_frames if len(raw_frames) % 2 == 0 else raw_frames[:-1]
+                return np.frombuffer(buf, dtype=np.int16)
+    except Exception:
+        pass
+
+    # 2. Soundfile fallback (if installed and libsndfile is available, e.g. desktop Windows/Linux)
+    try:
+        import soundfile as sf
+        data, sr = sf.read(path_str, dtype="int16")
+        if sr == 16000:
+            if data.ndim == 1:
+                return data
+            elif data.ndim == 2:
+                return data.mean(axis=1).astype(np.int16)
+    except Exception:
+        pass
+
+    # 3. Robust FFmpeg fallback (bundled libffmpeg.so on Android, ffmpeg.exe on Windows, ffmpeg on Linux)
+    try:
+        cmd = _tools.cmd(["ffmpeg", "-y", "-v", "error", "-i", path_str, "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NO_WINDOW, check=True)
+        if p.stdout:
+            buf = p.stdout if len(p.stdout) % 2 == 0 else p.stdout[:-1]
+            return np.frombuffer(buf, dtype=np.int16)
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode(errors="replace").strip() if e.stderr else str(e)
+        raise RuntimeError(f"FFmpeg failed to decode audio from {wav}: {err_msg}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load audio from {wav}: {e}")
+
+    raise RuntimeError(f"Unsupported audio format or empty file: {wav}")
 
 
 LOUDNESS_PIECE = 600       # seconds of audio worked out at a time

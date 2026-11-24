@@ -105,7 +105,6 @@ chaquopy {
             install("python-multipart==0.0.9")
             install("numpy")
             install("pillow")
-            install("soundfile")
             install("yt-dlp")
         }
     }

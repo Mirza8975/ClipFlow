@@ -75,7 +75,6 @@ async def _more_threads():
 
 @app.on_event("startup")
 def _startup():
-    global STARTUP_STATE
     try:
         db.init()
         # Verify required tables are present and queryable
