@@ -10,4 +10,9 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <!-- Explicitly permit local loopback cleartext traffic for embedded studio backend -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
 </network-security-config>

@@ -18,3 +18,8 @@ captures/
 # Build outputs
 *.apk
 *.aab
+
+# Synced assets & modules (generated/synced by Gradle preBuild)
+app/src/main/assets/web/
+app/src/main/python/studio/
+app/src/main/jniLibs/

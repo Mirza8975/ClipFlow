@@ -1,9 +1,11 @@
 package com.mirza8975.clipflow
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -29,10 +31,12 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -46,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var layoutServerConfig: View
     private lateinit var layoutError: View
+    private lateinit var layoutLoading: View
+    private lateinit var tvLoadingStatus: TextView
     private lateinit var fabSettings: FloatingActionButton
 
     // Server Config Views
@@ -83,6 +89,13 @@ class MainActivity : AppCompatActivity() {
         fileUploadCallback = null
     }
 
+    // Permission Launcher for Android 13+ (API 33+) DownloadManager notifications
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // DownloadManager continues download regardless of notification permission grant state
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Install splash screen for Android 12+
         installSplashScreen()
@@ -97,13 +110,49 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         setupBackNavigation()
 
-        // Check if server URL is already saved
-        val savedUrl = serverHelper.getSavedServerUrl()
-        if (savedUrl != null) {
-            connectToServer(savedUrl)
+        // Check deep link or server configuration
+        val deepLink = intent?.data
+        if (deepLink?.scheme?.lowercase() == "clipflow") {
+            handleCustomSchemeUri(deepLink)
         } else {
-            showServerConfigScreen()
+            val savedUrl = serverHelper.getSavedServerUrl()
+            if (savedUrl != null && !savedUrl.contains("127.0.0.1") && !savedUrl.contains("localhost")) {
+                // User explicitly saved a custom remote server URL
+                connectToServer(savedUrl)
+            } else {
+                // Standalone mode: automatically start local backend and connect
+                startEngineAndConnect("http://127.0.0.1:8765")
+            }
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme?.lowercase() == "clipflow") {
+            handleCustomSchemeUri(uri)
+        }
+    }
+
+    private fun handleCustomSchemeUri(uri: Uri) {
+        val host = uri.host ?: ""
+        val path = uri.path ?: ""
+        val query = uri.query
+        val savedBase = serverHelper.getSavedServerUrl() ?: return
+        val targetPath = if (host.isNotEmpty()) "/$host$path" else path
+        val fullUrl = "$savedBase$targetPath" + (if (!query.isNullOrEmpty()) "?$query" else "")
+
+        layoutServerConfig.visibility = View.GONE
+        layoutError.visibility = View.GONE
+        webView.visibility = View.VISIBLE
+        fabSettings.visibility = View.VISIBLE
+        currentLoadedUrl = fullUrl
+        webView.loadUrl(fullUrl)
     }
 
     private fun initViews() {
@@ -111,6 +160,8 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         layoutServerConfig = findViewById(R.id.layoutServerConfig)
         layoutError = findViewById(R.id.layoutError)
+        layoutLoading = findViewById(R.id.layoutLoading)
+        tvLoadingStatus = findViewById(R.id.tvLoadingStatus)
         fabSettings = findViewById(R.id.fabSettings)
 
         // Server Config UI
@@ -125,7 +176,7 @@ class MainActivity : AppCompatActivity() {
         btnChangeServer = layoutError.findViewById(R.id.btnChangeServer)
 
         // Pre-fill with saved or sensible default
-        val existing = serverHelper.getSavedServerUrl() ?: "http://192.168.1."
+        val existing = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
         etServerUrl.setText(existing)
         etServerUrl.setSelection(etServerUrl.text.length)
 
@@ -142,15 +193,19 @@ class MainActivity : AppCompatActivity() {
             }
 
             serverHelper.saveServerUrl(inputUrl)
-            connectToServer(inputUrl)
+            if (inputUrl.contains("127.0.0.1") || inputUrl.contains("localhost")) {
+                startEngineAndConnect(inputUrl)
+            } else {
+                connectToServer(inputUrl)
+            }
         }
 
         btnRetry.setOnClickListener {
-            val target = serverHelper.getSavedServerUrl() ?: currentLoadedUrl
-            if (target.isNotEmpty()) {
-                connectToServer(target)
+            val target = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
+            if (target.contains("127.0.0.1") || target.contains("localhost")) {
+                startEngineAndConnect(target)
             } else {
-                showServerConfigScreen()
+                connectToServer(target)
             }
         }
 
@@ -161,6 +216,63 @@ class MainActivity : AppCompatActivity() {
         fabSettings.setOnClickListener {
             showServerConfigScreen()
         }
+    }
+
+    private fun startEngineAndConnect(targetUrl: String = "http://127.0.0.1:8765") {
+        showLoadingScreen("Starting ClipFlow Studio Engine...")
+        ClipFlowBackendService.startService(this)
+
+        lifecycleScope.launch {
+            val startTime = System.currentTimeMillis()
+            val timeoutMs = 45000L
+            var connected = false
+
+            while (System.currentTimeMillis() - startTime < timeoutMs) {
+                val isHealthy = withContext(Dispatchers.IO) {
+                    try {
+                        val client = OkHttpClient.Builder()
+                            .connectTimeout(1, TimeUnit.SECONDS)
+                            .readTimeout(1, TimeUnit.SECONDS)
+                            .build()
+                        val req = Request.Builder().url("$targetUrl/healthz").build()
+                        client.newCall(req).execute().use { resp ->
+                            resp.isSuccessful
+                        }
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+
+                if (isHealthy) {
+                    connected = true
+                    break
+                }
+                delay(300)
+            }
+
+            if (connected) {
+                hideLoadingScreen()
+                serverHelper.saveServerUrl(targetUrl)
+                connectToServer(targetUrl)
+            } else {
+                hideLoadingScreen()
+                showErrorScreen("ClipFlow Studio engine could not start within 45 seconds.")
+            }
+        }
+    }
+
+    private fun showLoadingScreen(message: String) {
+        layoutLoading.visibility = View.VISIBLE
+        tvLoadingStatus.text = message
+        layoutServerConfig.visibility = View.GONE
+        layoutError.visibility = View.GONE
+        webView.visibility = View.GONE
+        fabSettings.visibility = View.GONE
+        progressBar.visibility = View.GONE
+    }
+
+    private fun hideLoadingScreen() {
+        layoutLoading.visibility = View.GONE
     }
 
     private fun testCurrentUrl() {
@@ -196,6 +308,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showServerConfigScreen() {
+        hideLoadingScreen()
         layoutServerConfig.visibility = View.VISIBLE
         layoutError.visibility = View.GONE
         webView.visibility = View.GONE
@@ -204,6 +317,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showErrorScreen(details: String) {
+        hideLoadingScreen()
         layoutError.visibility = View.VISIBLE
         layoutServerConfig.visibility = View.GONE
         webView.visibility = View.GONE
@@ -217,6 +331,7 @@ class MainActivity : AppCompatActivity() {
         val targetAppUrl = "$cleanBase/app"
         currentLoadedUrl = targetAppUrl
 
+        hideLoadingScreen()
         layoutServerConfig.visibility = View.GONE
         layoutError.visibility = View.GONE
         webView.visibility = View.VISIBLE
@@ -240,6 +355,10 @@ class MainActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
         }
+
+        // Normalize User-Agent by removing Version/X.X so Google OAuth does not reject WebView with disallowed_useragent
+        val defaultUa = settings.userAgentString
+        settings.userAgentString = defaultUa.replace(Regex("Version/\\d+\\.\\d+\\s?"), "")
 
         // Enable cookies and session persistence; disallow 3rd-party cookies
         val cookieManager = CookieManager.getInstance()
@@ -335,12 +454,18 @@ class MainActivity : AppCompatActivity() {
                 val scheme = targetUri.scheme?.lowercase() ?: ""
                 val trustedUri = serverHelper.getSavedServerUri()
 
-                // 1. Strictly block dangerous and non-http schemes (javascript:, file:, content:, etc.)
+                // 1. Handle custom scheme clipflow://
+                if (scheme == "clipflow") {
+                    handleCustomSchemeUri(targetUri)
+                    return true
+                }
+
+                // 2. Strictly block dangerous and non-http schemes (javascript:, file:, content:, etc.)
                 if (scheme != "http" && scheme != "https") {
                     return true // Block and consume
                 }
 
-                // 2. Exact Origin comparison: scheme, host, and effective port
+                // 3. Exact Origin comparison: scheme, host, and effective port
                 val isSameOrigin = ServerConfigHelper.isSameOrigin(targetUri, trustedUri)
 
                 if (isSameOrigin) {
@@ -348,7 +473,19 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
 
-                // 3. For external navigation or cross-origin redirects:
+                // 4. Allowed OAuth identity providers during sign-in
+                val host = targetUri.host?.lowercase() ?: ""
+                val isGoogleAuth = scheme == "https" && (
+                    host == "accounts.google.com" ||
+                    host.endsWith(".accounts.google.com") ||
+                    host == "accounts.youtube.com"
+                )
+                if (isGoogleAuth) {
+                    // Allow OAuth navigation inside WebView to preserve cookies & return to app
+                    return false
+                }
+
+                // 5. For external navigation or cross-origin redirects:
                 // Never allow cross-origin navigation inside the privileged WebView container
                 if (scheme == "https") {
                     return try {
@@ -360,7 +497,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 4. Block arbitrary untrusted plain HTTP navigation and HTTP redirects
+                // 6. Block arbitrary untrusted plain HTTP navigation and HTTP redirects
                 return true
             }
         }
@@ -464,6 +601,13 @@ class MainActivity : AppCompatActivity() {
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ClipFlow/$filename")
             }
 
+            // Request notification permission on Android 13+ (API 33+) if not yet granted
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+
             val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             dm.enqueue(request)
 
@@ -476,6 +620,12 @@ class MainActivity : AppCompatActivity() {
     private fun setupBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // 0. If engine is starting up, minimize app rather than interrupting
+                if (layoutLoading.visibility == View.VISIBLE) {
+                    moveTaskToBack(true)
+                    return
+                }
+
                 // 1. If Server Config is showing but a server is already loaded, close config
                 if (layoutServerConfig.visibility == View.VISIBLE && currentLoadedUrl.isNotEmpty()) {
                     layoutServerConfig.visibility = View.GONE

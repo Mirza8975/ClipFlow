@@ -1,0 +1,305 @@
+package com.mirza8975.clipflow
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.concurrent.Executors
+
+/**
+ * Foreground Service hosting the embedded ClipFlow FastAPI/Uvicorn server.
+ * Manages Python runtime lifecycle, background thread execution, and resource cleanup.
+ */
+class ClipFlowBackendService : Service() {
+
+    companion object {
+        private const val TAG = "ClipFlowBackendService"
+        private const val CHANNEL_ID = "clipflow_engine_channel"
+        private const val NOTIFICATION_ID = 8765
+
+        const val ACTION_START = "com.mirza8975.clipflow.action.START"
+        const val ACTION_STOP = "com.mirza8975.clipflow.action.STOP"
+
+        @Volatile
+        var isServerRunning = false
+            private set
+
+        fun startService(context: Context) {
+            val intent = Intent(context, ClipFlowBackendService::class.java).apply {
+                action = ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stopService(context: Context) {
+            val intent = Intent(context, ClipFlowBackendService::class.java).apply {
+                action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
+    }
+
+    private val executor = Executors.newSingleThreadExecutor()
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        val notification = buildForegroundNotification("Initializing ClipFlow Studio engine...")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        acquireWakeLock()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_START
+        when (action) {
+            ACTION_STOP -> {
+                shutdownServer()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                if (!isServerRunning) {
+                    executor.execute {
+                        bootPythonBackend()
+                    }
+                }
+            }
+        }
+        return START_STICKY
+    }
+
+    private fun bootPythonBackend() {
+        try {
+            updateNotification("Preparing web assets and studio files...")
+
+            // 1. Prepare directories in app-private storage
+            val dataDir = File(filesDir, "data").apply { mkdirs() }
+            val webDir = File(filesDir, "web")
+            val binDir = File(dataDir, "bin").apply { mkdirs() }
+            File(dataDir, "models").mkdirs()
+
+            // 2. Extract web assets if needed
+            extractWebAssetsIfNeeded(webDir)
+
+            // 3. Setup Chaquopy Python runtime
+            updateNotification("Starting embedded Python 3.11 runtime...")
+            if (!Python.isStarted()) {
+                Python.start(AndroidPlatform(applicationContext))
+            }
+            val py = Python.getInstance()
+
+            // 4. Start Uvicorn server via clipflow_entry module
+            updateNotification("Launching ClipFlow Studio (127.0.0.1:8765)...")
+            val entry = py.getModule("clipflow_entry")
+            val nativeLibDir = applicationInfo.nativeLibraryDir
+
+            entry.callAttr(
+                "start_server",
+                dataDir.absolutePath,
+                webDir.absolutePath,
+                nativeLibDir,
+                8765
+            )
+
+            isServerRunning = true
+            updateNotification("ClipFlow Studio Engine is active on 127.0.0.1:8765")
+            Log.i(TAG, "ClipFlow Python backend successfully started.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start Python backend", e)
+            updateNotification("Error starting engine: ${e.localizedMessage ?: "Unknown error"}")
+        }
+    }
+
+    private fun shutdownServer() {
+        Log.i(TAG, "Shutting down ClipFlow Python backend...")
+        try {
+            if (Python.isStarted()) {
+                val py = Python.getInstance()
+                val entry = py.getModule("clipflow_entry")
+                entry.callAttr("stop_server")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping Python backend", e)
+        } finally {
+            isServerRunning = false
+            releaseWakeLock()
+        }
+    }
+
+    private fun extractWebAssetsIfNeeded(destDir: File) {
+        val versionFile = File(destDir, ".version")
+        val currentCode = BuildConfig.VERSION_CODE.toString()
+
+        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentCode) {
+            return // Up to date
+        }
+
+        Log.i(TAG, "Extracting web assets to: ${destDir.absolutePath}")
+        destDir.deleteRecursively()
+        destDir.mkdirs()
+
+        copyAssetFolder("web", destDir)
+        try {
+            versionFile.writeText(currentCode)
+        } catch (e: IOException) {
+            Log.w(TAG, "Failed to write web assets version file", e)
+        }
+    }
+
+    private fun copyAssetFolder(assetPath: String, destDir: File) {
+        val assetManager = assets
+        val files = assetManager.list(assetPath) ?: return
+
+        if (files.isEmpty()) {
+            // Leaf file
+            try {
+                assetManager.open(assetPath).use { input ->
+                    FileOutputStream(destDir).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: IOException) {
+                Log.w(TAG, "Error copying asset file: $assetPath", e)
+            }
+        } else {
+            // Directory
+            destDir.mkdirs()
+            for (file in files) {
+                val subAssetPath = "$assetPath/$file"
+                val subDestFile = File(destDir, file)
+                // Check if directory or file
+                val subFiles = assetManager.list(subAssetPath)
+                if (subFiles != null && subFiles.isNotEmpty()) {
+                    copyAssetFolder(subAssetPath, subDestFile)
+                } else {
+                    // Try copying as file
+                    try {
+                        assetManager.open(subAssetPath).use { input ->
+                            FileOutputStream(subDestFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } catch (e: IOException) {
+                        // Might be empty directory
+                        subDestFile.mkdirs()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "ClipFlow:BackendServiceWakeLock"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(10 * 60 * 1000L) // 10 minutes timeout per acquisition
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not acquire WakeLock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing WakeLock", e)
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "ClipFlow Studio Engine",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Runs the local video and speech processing engine"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildForegroundNotification(statusText: String): Notification {
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("ClipFlow Studio Engine")
+            .setContentText(statusText)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    private fun updateNotification(statusText: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        manager?.notify(NOTIFICATION_ID, buildForegroundNotification(statusText))
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "Task removed, stopping backend service...")
+        shutdownServer()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        shutdownServer()
+        executor.shutdown()
+    }
+}

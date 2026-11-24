@@ -23,8 +23,8 @@ def _places() -> list:
     root = Path(__file__).resolve().parent.parent
     out = [root / "ffmpeg" / "bin", root / "bin", root]
     env = os.environ.get
-    if env("PEAKCUT_FFMPEG_DIR"):                    # the folder that holds ffmpeg, if it lives somewhere unusual
-        out.insert(0, Path(env("PEAKCUT_FFMPEG_DIR")))
+    if env("CLIPFLOW_FFMPEG_DIR") or env("PEAKCUT_FFMPEG_DIR"):                    # the folder that holds ffmpeg, if it lives somewhere unusual
+        out.insert(0, Path(env("CLIPFLOW_FFMPEG_DIR") or env("PEAKCUT_FFMPEG_DIR")))
     if sys.platform == "win32":
         local = Path(env("LOCALAPPDATA") or "")
         if str(local) not in ("", "."):
@@ -54,9 +54,25 @@ def setup() -> list:
             continue
         for d in _places():
             try:
-                if (d / (name + exe)).is_file():
+                target = d / (name + exe)
+                if target.is_file():
                     os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
                     break
+                so_target = d / f"lib{name}.so"
+                if so_target.is_file():
+                    root_dir = Path(os.environ.get("CLIPFLOW_ROOT") or os.environ.get("PEAKCUT_ROOT") or Path(__file__).resolve().parent.parent)
+                    data_dir = Path(os.environ.get("CLIPFLOW_DATA") or os.environ.get("PEAKCUT_DATA") or (root_dir / "data"))
+                    bin_dir = data_dir / "bin"
+                    bin_dir.mkdir(parents=True, exist_ok=True)
+                    sym = bin_dir / name
+                    if not sym.exists():
+                        try:
+                            sym.symlink_to(so_target)
+                        except OSError:
+                            pass
+                    if sym.is_file():
+                        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+                        break
             except OSError:
                 pass
         if not shutil.which(name):

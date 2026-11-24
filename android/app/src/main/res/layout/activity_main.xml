@@ -31,7 +31,50 @@
     <include
         android:id="@+id/layoutServerConfig"
         layout="@layout/view_server_config"
-        android:visibility="visible" />
+        android:visibility="gone" />
+
+    <!-- Startup engine loading overlay -->
+    <LinearLayout
+        android:id="@+id/layoutLoading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:background="@color/bg_dark"
+        android:padding="24dp"
+        android:visibility="visible">
+
+        <ImageView
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:src="@drawable/ic_launcher_foreground"
+            android:contentDescription="@string/app_name" />
+
+        <ProgressBar
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="24dp"
+            android:indeterminateTint="@color/accent_blue" />
+
+        <TextView
+            android:id="@+id/tvLoadingStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Starting ClipFlow Studio Engine..."
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvLoadingSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Initializing local embedded environment"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+    </LinearLayout>
 
     <!-- Floating server settings button (visible when webview is loaded) -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton

@@ -10,5 +10,7 @@ class ClipFlowApp : Application() {
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
+        // Automatically start the embedded Python backend service
+        ClipFlowBackendService.startService(this)
     }
 }

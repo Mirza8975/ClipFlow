@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
 
 android {
@@ -18,6 +19,26 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePath = project.findProperty("android.injected.signing.store.file") as? String
+                ?: System.getenv("KEYSTORE_FILE")
+            if (keystorePath != null && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = project.findProperty("android.injected.signing.store.password") as? String
+                    ?: System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = project.findProperty("android.injected.signing.key.alias") as? String
+                    ?: System.getenv("KEY_ALIAS")
+                keyPassword = project.findProperty("android.injected.signing.key.password") as? String
+                    ?: System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -28,7 +49,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile != null) {
+                signingConfig = releaseSigning
+            }
+            // When releaseSigning.storeFile is not set, Gradle builds an unsigned release APK (app-release-unsigned.apk)
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -66,3 +91,36 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        pip {
+            install("fastapi==0.115.0")
+            install("uvicorn==0.30.0")
+            install("sqlalchemy==2.0.35")
+            install("httpx==0.27.0")
+            install("python-multipart==0.0.9")
+            install("numpy")
+            install("pillow")
+            install("soundfile")
+            install("yt-dlp")
+        }
+    }
+}
+
+val syncWebAssets = tasks.register<Sync>("syncWebAssets") {
+    from(rootProject.file("../web"))
+    into(file("src/main/assets/web"))
+}
+
+val syncStudioPython = tasks.register<Sync>("syncStudioPython") {
+    from(rootProject.file("../studio"))
+    into(file("src/main/python/studio"))
+    exclude("__pycache__", "*.pyc")
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncWebAssets, syncStudioPython)
+}
+

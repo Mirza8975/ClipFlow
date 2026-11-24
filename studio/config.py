@@ -5,7 +5,8 @@ import os
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+_clipflow_root = os.environ.get("CLIPFLOW_ROOT") or os.environ.get("PEAKCUT_ROOT")
+ROOT = Path(_clipflow_root) if _clipflow_root else Path(__file__).resolve().parent.parent
 
 
 def _load_dotenv():

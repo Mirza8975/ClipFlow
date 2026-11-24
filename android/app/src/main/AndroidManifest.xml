@@ -16,6 +16,14 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Notification permission for Android 13+ (API 33+) DownloadManager alerts -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Foreground service and wake lock permissions for embedded backend execution -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:name=".ClipFlowApp"
         android:allowBackup="true"
@@ -30,6 +38,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.ClipFlow"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
             android:windowSoftInputMode="adjustResize">
@@ -37,7 +46,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Custom scheme deep link: clipflow://auth/callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="clipflow" />
+            </intent-filter>
         </activity>
+
+        <!-- ClipFlow Embedded Python Foreground Service -->
+        <service
+            android:name=".ClipFlowBackendService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
 
     </application>
 
