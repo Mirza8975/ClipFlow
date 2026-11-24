@@ -121,6 +121,14 @@ val syncStudioPython = tasks.register<Sync>("syncStudioPython") {
     exclude("__pycache__", "*.pyc")
 }
 
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("PythonSources") }.configureEach {
+    dependsOn(syncStudioPython)
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(syncWebAssets)
+}
+
 tasks.named("preBuild") {
     dependsOn(syncWebAssets, syncStudioPython)
 }
