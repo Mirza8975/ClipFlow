@@ -96,6 +96,7 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         pip {
+            install("pydantic==1.10.19")
             install("fastapi==0.115.0")
             install("uvicorn==0.30.0")
             install("sqlalchemy==2.0.35")
