@@ -450,7 +450,7 @@ def admin_page(request: Request, rest: str = ""):
 def healthz():
     with db.engine.connect() as c:
         c.execute(sa.text("select 1"))
-    return {"ok": True}
+    return {"ok": True, "status": "ready", "service": "clipflow"}
 
 
 @app.get("/brand/{name}")

@@ -76,10 +76,18 @@ class _Font:
 CAPTION_LEAD = 0.0  # measured: word stamps are within 0.15 s of the voice, so no shift is needed
 def install_fonts():
     """Copy the bundled caption fonts next to the data, so captions look the same on every machine and server."""
-    src = Path(__file__).resolve().parent / "fonts"
-    for f in src.glob("*.ttf"):
-        if not (config.FONTS_DIR / f.name).exists():
-            shutil.copyfile(f, config.FONTS_DIR / f.name)
+    try:
+        src = Path(__file__).resolve().parent / "fonts"
+        if src.is_dir():
+            for f in src.glob("*.ttf"):
+                target = config.FONTS_DIR / f.name
+                if not target.exists():
+                    try:
+                        shutil.copyfile(f, target)
+                    except OSError:
+                        pass
+    except Exception as e:
+        print(f"[ClipFlow] Font installation notice: {e}", flush=True)
 
 
 LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)",

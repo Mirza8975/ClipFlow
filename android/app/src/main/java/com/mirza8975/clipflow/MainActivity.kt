@@ -42,9 +42,14 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
+import android.util.Log
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "ClipFlowMainActivity"
+    }
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
@@ -101,6 +106,8 @@ class MainActivity : AppCompatActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        Log.i(TAG, "[ANDROID_APP_STARTED] Activity created.")
 
         // Keep screen on during active operations to prevent network sleep during large video uploads
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -202,6 +209,7 @@ class MainActivity : AppCompatActivity() {
 
         btnRetry.setOnClickListener {
             val target = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
+            ClipFlowBackendService.resetState()
             if (target.contains("127.0.0.1") || target.contains("localhost")) {
                 startEngineAndConnect(target)
             } else {
@@ -224,30 +232,40 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val startTime = System.currentTimeMillis()
-            val timeoutMs = 45000L
+            val timeoutMs = 30000L
+            var pollDelay = 200L
             var connected = false
 
             while (System.currentTimeMillis() - startTime < timeoutMs) {
-                val isHealthy = withContext(Dispatchers.IO) {
-                    try {
-                        val client = OkHttpClient.Builder()
-                            .connectTimeout(1, TimeUnit.SECONDS)
-                            .readTimeout(1, TimeUnit.SECONDS)
-                            .build()
-                        val req = Request.Builder().url("$targetUrl/healthz").build()
-                        client.newCall(req).execute().use { resp ->
-                            resp.isSuccessful
-                        }
-                    } catch (e: Exception) {
-                        false
+                // 1. Inspect backend service lifecycle state
+                val serviceState = ClipFlowBackendService.currentState
+                when (serviceState) {
+                    is ClipFlowBackendService.BackendState.Starting -> {
+                        tvLoadingStatus.text = serviceState.stage
                     }
+                    is ClipFlowBackendService.BackendState.Error -> {
+                        Log.e(TAG, "[FASTAPI_SERVER_FAILED] Backend reported failure: ${serviceState.message}")
+                        hideLoadingScreen()
+                        val details = serviceState.details?.let { "\n\n$it" } ?: ""
+                        showErrorScreen("ClipFlow Studio engine failed to start:\n${serviceState.message}$details")
+                        return@launch
+                    }
+                    else -> {}
+                }
+
+                // 2. Perform health check on the local endpoint
+                val isHealthy = withContext(Dispatchers.IO) {
+                    val result = serverHelper.checkHealth(targetUrl)
+                    result is ConnectionResult.Success
                 }
 
                 if (isHealthy) {
                     connected = true
                     break
                 }
-                delay(300)
+
+                delay(pollDelay)
+                pollDelay = (pollDelay * 1.2).toLong().coerceAtMost(500L)
             }
 
             if (connected) {
@@ -256,7 +274,13 @@ class MainActivity : AppCompatActivity() {
                 connectToServer(targetUrl)
             } else {
                 hideLoadingScreen()
-                showErrorScreen("ClipFlow Studio engine could not start within 45 seconds.")
+                val lastErr = ClipFlowBackendService.lastErrorMessage
+                val msg = if (lastErr != null) {
+                    "ClipFlow Studio engine failed to start within 30 seconds:\n\n$lastErr"
+                } else {
+                    "Unable to reach the ClipFlow server.\nClipFlow Studio engine did not respond on 127.0.0.1:8765 within 30 seconds."
+                }
+                showErrorScreen(msg)
             }
         }
     }
@@ -331,6 +355,7 @@ class MainActivity : AppCompatActivity() {
         val targetAppUrl = "$cleanBase/app"
         currentLoadedUrl = targetAppUrl
 
+        Log.i(TAG, "[WEBVIEW_CONNECTED] Connecting WebView to $targetAppUrl")
         hideLoadingScreen()
         layoutServerConfig.visibility = View.GONE
         layoutError.visibility = View.GONE

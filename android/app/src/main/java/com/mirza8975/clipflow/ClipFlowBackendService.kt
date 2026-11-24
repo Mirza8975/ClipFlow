@@ -26,6 +26,13 @@ import java.util.concurrent.Executors
  */
 class ClipFlowBackendService : Service() {
 
+    sealed class BackendState {
+        object Stopped : BackendState()
+        data class Starting(val stage: String) : BackendState()
+        object Ready : BackendState()
+        data class Error(val message: String, val details: String? = null) : BackendState()
+    }
+
     companion object {
         private const val TAG = "ClipFlowBackendService"
         private const val CHANNEL_ID = "clipflow_engine_channel"
@@ -35,8 +42,20 @@ class ClipFlowBackendService : Service() {
         const val ACTION_STOP = "com.mirza8975.clipflow.action.STOP"
 
         @Volatile
-        var isServerRunning = false
+        var currentState: BackendState = BackendState.Stopped
             private set
+
+        @Volatile
+        var lastErrorMessage: String? = null
+            private set
+
+        val isServerRunning: Boolean
+            get() = currentState is BackendState.Ready
+
+        fun resetState() {
+            currentState = BackendState.Stopped
+            lastErrorMessage = null
+        }
 
         fun startService(context: Context) {
             val intent = Intent(context, ClipFlowBackendService::class.java).apply {
@@ -81,6 +100,7 @@ class ClipFlowBackendService : Service() {
         }
 
         acquireWakeLock()
+        Log.i(TAG, "[FOREGROUND_SERVICE_STARTED] Foreground service active.")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,7 +113,8 @@ class ClipFlowBackendService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
-                if (!isServerRunning) {
+                val state = currentState
+                if (state !is BackendState.Ready && state !is BackendState.Starting) {
                     executor.execute {
                         bootPythonBackend()
                     }
@@ -105,6 +126,7 @@ class ClipFlowBackendService : Service() {
 
     private fun bootPythonBackend() {
         try {
+            currentState = BackendState.Starting("Preparing environment and assets...")
             updateNotification("Preparing web assets and studio files...")
 
             // 1. Prepare directories in app-private storage
@@ -112,19 +134,25 @@ class ClipFlowBackendService : Service() {
             val webDir = File(filesDir, "web")
             val binDir = File(dataDir, "bin").apply { mkdirs() }
             File(dataDir, "models").mkdirs()
+            File(dataDir, "tmp").mkdirs()
+            File(dataDir, "fonts").mkdirs()
 
             // 2. Extract web assets if needed
             extractWebAssetsIfNeeded(webDir)
 
             // 3. Setup Chaquopy Python runtime
+            currentState = BackendState.Starting("Initializing Chaquopy Python 3.11...")
             updateNotification("Starting embedded Python 3.11 runtime...")
             if (!Python.isStarted()) {
                 Python.start(AndroidPlatform(applicationContext))
             }
+            Log.i(TAG, "[CHAQUOPY_INITIALIZED] Embedded Python runtime ready.")
             val py = Python.getInstance()
 
             // 4. Start Uvicorn server via clipflow_entry module
+            currentState = BackendState.Starting("Launching ClipFlow Studio engine on 127.0.0.1:8765...")
             updateNotification("Launching ClipFlow Studio (127.0.0.1:8765)...")
+            Log.i(TAG, "[FASTAPI_SERVER_STARTING] Invoking clipflow_entry.start_server...")
             val entry = py.getModule("clipflow_entry")
             val nativeLibDir = applicationInfo.nativeLibraryDir
 
@@ -136,12 +164,17 @@ class ClipFlowBackendService : Service() {
                 8765
             )
 
-            isServerRunning = true
+            currentState = BackendState.Ready
+            lastErrorMessage = null
             updateNotification("ClipFlow Studio Engine is active on 127.0.0.1:8765")
-            Log.i(TAG, "ClipFlow Python backend successfully started.")
+            Log.i(TAG, "[FASTAPI_SERVER_READY] ClipFlow Python backend successfully started and verified.")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start Python backend", e)
-            updateNotification("Error starting engine: ${e.localizedMessage ?: "Unknown error"}")
+            val errorMsg = e.localizedMessage ?: "Unknown startup exception"
+            val stackTrace = Log.getStackTraceString(e)
+            Log.e(TAG, "[FASTAPI_SERVER_FAILED] Failed to start Python backend: $errorMsg\n$stackTrace", e)
+            currentState = BackendState.Error(errorMsg, stackTrace)
+            lastErrorMessage = errorMsg
+            updateNotification("Engine error: $errorMsg")
         }
     }
 
@@ -156,7 +189,7 @@ class ClipFlowBackendService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping Python backend", e)
         } finally {
-            isServerRunning = false
+            currentState = BackendState.Stopped
             releaseWakeLock()
         }
     }
@@ -202,12 +235,10 @@ class ClipFlowBackendService : Service() {
             for (file in files) {
                 val subAssetPath = "$assetPath/$file"
                 val subDestFile = File(destDir, file)
-                // Check if directory or file
                 val subFiles = assetManager.list(subAssetPath)
                 if (subFiles != null && subFiles.isNotEmpty()) {
                     copyAssetFolder(subAssetPath, subDestFile)
                 } else {
-                    // Try copying as file
                     try {
                         assetManager.open(subAssetPath).use { input ->
                             FileOutputStream(subDestFile).use { output ->
@@ -215,7 +246,6 @@ class ClipFlowBackendService : Service() {
                             }
                         }
                     } catch (e: IOException) {
-                        // Might be empty directory
                         subDestFile.mkdirs()
                     }
                 }

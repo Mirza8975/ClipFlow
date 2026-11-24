@@ -4,10 +4,36 @@ Runs the FastAPI/Uvicorn server inside Android using Chaquopy.
 import os
 import sys
 import threading
+import time
+import traceback
+import urllib.request
 from pathlib import Path
 
 _server = None
 _thread = None
+_server_status = {
+    "started": False,
+    "ready": False,
+    "error": None,
+    "port": 8765,
+}
+
+TAG = "ClipFlowBackend"
+
+
+def _log(level: str, msg: str):
+    prefix = f"[{TAG}] {msg}"
+    print(prefix, flush=True)
+    try:
+        from android.util import Log
+        if level == "e":
+            Log.e(TAG, msg)
+        elif level == "w":
+            Log.w(TAG, msg)
+        else:
+            Log.i(TAG, msg)
+    except Exception:
+        pass
 
 
 def setup_environment(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765):
@@ -39,18 +65,33 @@ def setup_environment(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 
             os.environ["PATH"] = ffmpeg_dir + os.pathsep + cur_path
 
 
-def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765):
-    """Starts the Uvicorn server in a background daemon thread."""
-    global _server, _thread
+def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765, timeout: float = 25.0) -> bool:
+    """Starts the Uvicorn server in a background thread and waits until it responds to /healthz."""
+    global _server, _thread, _server_status
 
-    if _server is not None and not _server.should_exit:
-        print("[ClipFlow] Server is already running.")
+    if _server is not None and getattr(_server, "started", False) and not getattr(_server, "should_exit", False):
+        _log("i", f"[FASTAPI_SERVER_READY] Server is already running on 127.0.0.1:{port}.")
+        _server_status["started"] = True
+        _server_status["ready"] = True
         return True
 
-    setup_environment(data_dir, web_dir, ffmpeg_dir, port)
+    _server_status["started"] = False
+    _server_status["ready"] = False
+    _server_status["error"] = None
+    _server_status["port"] = port
 
-    import uvicorn
-    from studio.server import app
+    setup_environment(data_dir, web_dir, ffmpeg_dir, port)
+    _log("i", "[PYTHON_BACKEND_INITIALIZED] Environment variables and paths configured.")
+
+    try:
+        import uvicorn
+        from studio.server import app
+    except Exception as e:
+        tb = traceback.format_exc()
+        err_msg = f"Failed to import studio.server: {e}\n{tb}"
+        _log("e", f"[FASTAPI_SERVER_FAILED] {err_msg}")
+        _server_status["error"] = err_msg
+        raise RuntimeError(err_msg) from e
 
     class AndroidServer(uvicorn.Server):
         def install_signal_handlers(self):
@@ -61,28 +102,78 @@ def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765)
         app,
         host="127.0.0.1",
         port=port,
-        log_level="warning",
+        log_level="info",
         access_log=False,
     )
     _server = AndroidServer(config=config)
 
     def _run():
-        print(f"[ClipFlow] Starting embedded Uvicorn server on 127.0.0.1:{port}...")
+        _log("i", f"[FASTAPI_SERVER_STARTING] Starting Uvicorn event loop on 127.0.0.1:{port}...")
         try:
             _server.run()
         except Exception as e:
-            print(f"[ClipFlow] Server error: {e}")
+            tb = traceback.format_exc()
+            err_msg = f"Uvicorn runtime error: {e}\n{tb}"
+            _log("e", f"[FASTAPI_SERVER_FAILED] {err_msg}")
+            _server_status["error"] = err_msg
+        finally:
+            if getattr(_server, "should_exit", False) and not getattr(_server, "started", False):
+                if not _server_status.get("error"):
+                    _server_status["error"] = "FastAPI application lifespan startup failed. Check server logs."
+                    _log("e", f"[FASTAPI_SERVER_FAILED] {_server_status['error']}")
 
     _thread = threading.Thread(target=_run, name="ClipFlow-Uvicorn", daemon=True)
     _thread.start()
-    return True
+
+    # Bounded wait for server socket bind and /healthz readiness
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if getattr(_server, "started", False) and not getattr(_server, "should_exit", False):
+            # Verify healthz endpoint responds directly
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/healthz")
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        _log("i", f"[FASTAPI_SERVER_READY] Verified healthz on 127.0.0.1:{port}")
+                        _server_status["started"] = True
+                        _server_status["ready"] = True
+                        _server_status["error"] = None
+                        return True
+            except Exception:
+                pass
+
+        if getattr(_server, "should_exit", False) or not _thread.is_alive():
+            err_msg = _server_status.get("error") or "Server thread exited prematurely without binding."
+            _log("e", f"[FASTAPI_SERVER_FAILED] {err_msg}")
+            raise RuntimeError(err_msg)
+
+        time.sleep(0.15)
+
+    err_msg = _server_status.get("error") or f"Server did not become ready on 127.0.0.1:{port} within {timeout}s."
+    _log("e", f"[FASTAPI_SERVER_FAILED] {err_msg}")
+    raise TimeoutError(err_msg)
 
 
-def stop_server():
-    """Signals the Uvicorn server to stop."""
-    global _server
+def is_server_ready() -> bool:
+    """Returns whether the embedded server is actively serving requests."""
+    return bool(_server_status.get("ready", False))
+
+
+def get_last_error() -> str:
+    """Returns the last recorded startup error or empty string."""
+    return str(_server_status.get("error") or "")
+
+
+def stop_server() -> bool:
+    """Signals the Uvicorn server to stop and waits for clean exit."""
+    global _server, _thread, _server_status
     if _server is not None:
-        print("[ClipFlow] Stopping embedded Uvicorn server...")
+        _log("i", "Stopping embedded Uvicorn server...")
         _server.should_exit = True
+        if _thread is not None and _thread.is_alive():
+            _thread.join(timeout=3.0)
         _server = None
+        _thread = None
+        _server_status["started"] = False
+        _server_status["ready"] = False
     return True

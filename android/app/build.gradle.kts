@@ -95,6 +95,7 @@ dependencies {
 chaquopy {
     defaultConfig {
         version = "3.11"
+        extractPackages("studio")
         pip {
             install("pydantic==1.10.19")
             install("fastapi==0.115.0")
