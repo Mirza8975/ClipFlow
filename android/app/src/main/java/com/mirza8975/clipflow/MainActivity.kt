@@ -3,6 +3,8 @@ package com.mirza8975.clipflow
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -57,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var layoutError: View
     private lateinit var layoutLoading: View
     private lateinit var tvLoadingStatus: TextView
+    private lateinit var tvLoadingVersion: TextView
     private lateinit var fabSettings: FloatingActionButton
 
     // Server Config Views
@@ -67,6 +70,9 @@ class MainActivity : AppCompatActivity() {
 
     // Error Views
     private lateinit var tvErrorDetails: TextView
+    private lateinit var tvAppVersion: TextView
+    private lateinit var tvDiagnosticsLog: TextView
+    private lateinit var btnCopyDiagnostics: Button
     private lateinit var btnRetry: Button
     private lateinit var btnChangeServer: Button
 
@@ -169,7 +175,11 @@ class MainActivity : AppCompatActivity() {
         layoutError = findViewById(R.id.layoutError)
         layoutLoading = findViewById(R.id.layoutLoading)
         tvLoadingStatus = findViewById(R.id.tvLoadingStatus)
+        tvLoadingVersion = layoutLoading.findViewById(R.id.tvLoadingVersion)
         fabSettings = findViewById(R.id.fabSettings)
+
+        // Show active version badge on loading screen
+        tvLoadingVersion.text = "ClipFlow v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
 
         // Server Config UI
         etServerUrl = layoutServerConfig.findViewById(R.id.etServerUrl)
@@ -179,8 +189,21 @@ class MainActivity : AppCompatActivity() {
 
         // Error UI
         tvErrorDetails = layoutError.findViewById(R.id.tvErrorDetails)
+        tvAppVersion = layoutError.findViewById(R.id.tvAppVersion)
+        tvDiagnosticsLog = layoutError.findViewById(R.id.tvDiagnosticsLog)
+        btnCopyDiagnostics = layoutError.findViewById(R.id.btnCopyDiagnostics)
         btnRetry = layoutError.findViewById(R.id.btnRetry)
         btnChangeServer = layoutError.findViewById(R.id.btnChangeServer)
+
+        tvAppVersion.text = "ClipFlow v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
+
+        btnCopyDiagnostics.setOnClickListener {
+            val diag = ClipFlowBackendService.getDetailedDiagnostics(this)
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("ClipFlow Diagnostics", diag)
+            clipboard.setPrimaryClip(clip)
+            Toast.makeText(this, getString(R.string.diagnostics_copied), Toast.LENGTH_SHORT).show()
+        }
 
         // Pre-fill with saved or sensible default
         val existing = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
@@ -209,9 +232,10 @@ class MainActivity : AppCompatActivity() {
 
         btnRetry.setOnClickListener {
             val target = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
-            ClipFlowBackendService.resetState()
             if (target.contains("127.0.0.1") || target.contains("localhost")) {
-                startEngineAndConnect(target)
+                showLoadingScreen("Restarting ClipFlow Studio Engine...")
+                ClipFlowBackendService.restartService(this)
+                startEngineAndConnect(target, isRestart = true)
             } else {
                 connectToServer(target)
             }
@@ -226,13 +250,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startEngineAndConnect(targetUrl: String = "http://127.0.0.1:8765") {
-        showLoadingScreen("Starting ClipFlow Studio Engine...")
-        ClipFlowBackendService.startService(this)
+    private fun startEngineAndConnect(targetUrl: String = "http://127.0.0.1:8765", isRestart: Boolean = false) {
+        showLoadingScreen(if (isRestart) "Restarting ClipFlow Studio Engine..." else "Starting ClipFlow Studio Engine...")
+        if (!isRestart) {
+            ClipFlowBackendService.startService(this)
+        }
 
         lifecycleScope.launch {
             val startTime = System.currentTimeMillis()
-            val timeoutMs = 30000L
+            val timeoutMs = 45000L
             var pollDelay = 200L
             var connected = false
 
@@ -276,9 +302,9 @@ class MainActivity : AppCompatActivity() {
                 hideLoadingScreen()
                 val lastErr = ClipFlowBackendService.lastErrorMessage
                 val msg = if (lastErr != null) {
-                    "ClipFlow Studio engine failed to start within 30 seconds:\n\n$lastErr"
+                    "ClipFlow Studio engine failed to start within 45 seconds:\n\n$lastErr"
                 } else {
-                    "Unable to reach the ClipFlow server.\nClipFlow Studio engine did not respond on 127.0.0.1:8765 within 30 seconds."
+                    "Unable to reach the ClipFlow server.\nClipFlow Studio engine did not respond on 127.0.0.1:8765 within 45 seconds."
                 }
                 showErrorScreen(msg)
             }
@@ -348,6 +374,9 @@ class MainActivity : AppCompatActivity() {
         fabSettings.visibility = View.VISIBLE
         progressBar.visibility = View.GONE
         tvErrorDetails.text = details
+
+        val diag = ClipFlowBackendService.getDetailedDiagnostics(this)
+        tvDiagnosticsLog.text = diag
     }
 
     private fun connectToServer(baseUrl: String) {

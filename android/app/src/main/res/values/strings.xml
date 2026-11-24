@@ -15,4 +15,8 @@
     <string name="error_server_unreachable">Unable to reach the ClipFlow server.</string>
     <string name="download_started">Downloading clip...</string>
     <string name="press_again_to_exit">Press back again to exit</string>
+    <string name="btn_copy_diagnostics">Copy Diagnostics</string>
+    <string name="diagnostics_copied">Diagnostics copied to clipboard</string>
+    <string name="diagnostics_title">Engine Diagnostics &amp; Log</string>
+    <string name="btn_retry_startup">Retry Startup</string>
 </resources>

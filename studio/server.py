@@ -54,32 +54,106 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
 
 BOOT = f"{int(time.time()) % 100000:x}"     # part of every sync token, so pages reload their data after a restart
 
+STARTUP_STATE = {
+    "db_initialized": False,
+    "db_error": None,
+    "critical_error": None,
+    "warnings": [],
+}
+
 
 @app.on_event("startup")
 async def _more_threads():
-    import anyio.to_thread
-    anyio.to_thread.current_default_thread_limiter().total_tokens = int(config.env("PEAKCUT_REQUEST_THREADS", "64"))
+    try:
+        import anyio.to_thread
+        anyio.to_thread.current_default_thread_limiter().total_tokens = int(config.env("PEAKCUT_REQUEST_THREADS", "64"))
+    except Exception as e:
+        msg = f"Thread limiter adjustment notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
 
 
 @app.on_event("startup")
 def _startup():
-    db.init()
-    for f in (config.TMP_DIR / "uploads").glob("*"):      # uploads cut short by a restart
-        try:
-            f.unlink()
-        except OSError:
-            pass
-    render.install_fonts()
-    if _tools.missing():
-        print("\n  " + _tools.HELP + "\n", flush=True)
-    if not transcribe.REMOTE and config.env("PEAKCUT_FETCH_MODEL", "1") != "0":     # the speech model: fetched now, in the background, if it was never downloaded
-        from . import fetch_model
-        threading.Thread(target=lambda: _quiet(fetch_model.ensure), daemon=True).start()
-    jobs.start()
-    live.start()
-    posting.start()
-    from . import updates
-    updates.start()                  # looks for a newer PeakCut every minute, in the background
+    global STARTUP_STATE
+    try:
+        db.init()
+        # Verify required tables are present and queryable
+        with db.engine.connect() as c:
+            c.execute(sa.select(db.users.c.id).limit(1))
+        STARTUP_STATE["db_initialized"] = True
+    except Exception as e:
+        err = f"Database initialization failed: {e}"
+        print(f"[ClipFlow] {err}", flush=True)
+        STARTUP_STATE["db_initialized"] = False
+        STARTUP_STATE["db_error"] = str(e)
+        STARTUP_STATE["critical_error"] = err
+
+    try:
+        uploads = config.TMP_DIR / "uploads"
+        if uploads.is_dir():
+            for f in uploads.glob("*"):      # uploads cut short by a restart
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except Exception as e:
+        msg = f"Temp uploads cleanup notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        render.install_fonts()
+    except Exception as e:
+        msg = f"Font installation notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        if _tools.missing():
+            print("\n  " + _tools.HELP + "\n", flush=True)
+    except Exception as e:
+        msg = f"Tools verification notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        if not transcribe.REMOTE and config.env("PEAKCUT_FETCH_MODEL", "1") != "0":     # the speech model: fetched now, in the background, if it was never downloaded
+            from . import fetch_model
+            threading.Thread(target=lambda: _quiet(fetch_model.ensure), daemon=True).start()
+    except Exception as e:
+        msg = f"Speech model fetch notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        jobs.start()
+    except Exception as e:
+        msg = f"Jobs worker service notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        live.start()
+    except Exception as e:
+        msg = f"Live stream monitor notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        posting.start()
+    except Exception as e:
+        msg = f"Social posting service notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
+
+    try:
+        from . import updates
+        updates.start()                  # looks for a newer PeakCut every minute, in the background
+    except Exception as e:
+        msg = f"Update checker notice: {e}"
+        print(f"[ClipFlow] {msg}", flush=True)
+        STARTUP_STATE["warnings"].append(msg)
 
 
 # ================================================================ the gate: who is asking, and are they allowed
@@ -447,10 +521,44 @@ def admin_page(request: Request, rest: str = ""):
 
 
 @app.get("/healthz")
-def healthz():
-    with db.engine.connect() as c:
-        c.execute(sa.text("select 1"))
-    return {"ok": True, "status": "ready", "service": "clipflow"}
+def healthz(response: Response):
+    # 1. Critical initialization check
+    if not STARTUP_STATE.get("db_initialized"):
+        response.status_code = 503
+        return {
+            "ok": False,
+            "status": "degraded",
+            "service": "clipflow",
+            "critical_error": STARTUP_STATE.get("critical_error") or "Database initialization incomplete",
+            "database": f"unhealthy: {STARTUP_STATE.get('db_error')}",
+            "warnings": STARTUP_STATE.get("warnings", []),
+        }
+
+    # 2. Live query verification on actual required core tables
+    try:
+        with db.engine.connect() as c:
+            c.execute(sa.select(db.users.c.id).limit(1))
+    except Exception as e:
+        print(f"[ClipFlow] Health check required tables probe failed: {e}", flush=True)
+        response.status_code = 503
+        return {
+            "ok": False,
+            "status": "degraded",
+            "service": "clipflow",
+            "database": f"unhealthy: {e}",
+            "warnings": STARTUP_STATE.get("warnings", []),
+        }
+
+    # 3. Healthy readiness response
+    payload = {
+        "ok": True,
+        "status": "ready",
+        "service": "clipflow",
+        "database": "ok",
+    }
+    if STARTUP_STATE.get("warnings"):
+        payload["warnings"] = STARTUP_STATE["warnings"]
+    return payload
 
 
 @app.get("/brand/{name}")

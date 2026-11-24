@@ -74,6 +74,14 @@
             android:text="Initializing local embedded environment"
             android:textColor="@color/text_secondary"
             android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/tvLoadingVersion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
     </LinearLayout>
 
     <!-- Floating server settings button (visible when webview is loaded) -->

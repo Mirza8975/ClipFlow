@@ -40,6 +40,7 @@ class ClipFlowBackendService : Service() {
 
         const val ACTION_START = "com.mirza8975.clipflow.action.START"
         const val ACTION_STOP = "com.mirza8975.clipflow.action.STOP"
+        const val ACTION_RESTART = "com.mirza8975.clipflow.action.RESTART"
 
         @Volatile
         var currentState: BackendState = BackendState.Stopped
@@ -49,12 +50,29 @@ class ClipFlowBackendService : Service() {
         var lastErrorMessage: String? = null
             private set
 
+        @Volatile
+        var lastErrorDetails: String? = null
+            private set
+
         val isServerRunning: Boolean
             get() = currentState is BackendState.Ready
 
         fun resetState() {
             currentState = BackendState.Stopped
             lastErrorMessage = null
+            lastErrorDetails = null
+        }
+
+        fun restartService(context: Context) {
+            resetState()
+            val intent = Intent(context, ClipFlowBackendService::class.java).apply {
+                action = ACTION_RESTART
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun startService(context: Context) {
@@ -73,6 +91,52 @@ class ClipFlowBackendService : Service() {
                 action = ACTION_STOP
             }
             context.startService(intent)
+        }
+
+        fun getDetailedDiagnostics(context: Context): String {
+            val sb = StringBuilder()
+            sb.append("=== ClipFlow Engine Diagnostics ===\n")
+            sb.append("App Version: ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})\n")
+            sb.append("Android OS: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
+            sb.append("Device: ${Build.MANUFACTURER} ${Build.MODEL}\n")
+            sb.append("Supported ABIs: ${Build.SUPPORTED_ABIS.joinToString(", ")}\n")
+            sb.append("State: $currentState\n")
+
+            if (lastErrorMessage != null) {
+                sb.append("\nLast Failure: $lastErrorMessage\n")
+            }
+            if (lastErrorDetails != null) {
+                sb.append("\n--- Service Stack Trace ---\n")
+                sb.append(lastErrorDetails).append("\n")
+            }
+
+            try {
+                if (Python.isStarted()) {
+                    val py = Python.getInstance()
+                    val entry = py.getModule("clipflow_entry")
+                    val pyDiag = entry.callAttr("get_diagnostics").toString()
+                    sb.append("\n--- Python Runtime Diagnostics ---\n")
+                    sb.append(pyDiag).append("\n")
+                } else {
+                    sb.append("\nPython Runtime: Not started yet\n")
+                }
+            } catch (e: Exception) {
+                sb.append("\n[Chaquopy Diagnostics Notice: ${e.localizedMessage}]\n")
+            }
+
+            try {
+                val logFile = File(context.filesDir, "data/startup_diagnostics.log")
+                if (logFile.exists()) {
+                    sb.append("\n--- On-Disk Startup Log (Last 40 lines) ---\n")
+                    val lines = logFile.readLines()
+                    val tail = lines.takeLast(40)
+                    sb.append(tail.joinToString("\n")).append("\n")
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+
+            return sb.toString()
         }
     }
 
@@ -111,6 +175,12 @@ class ClipFlowBackendService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_RESTART -> {
+                executor.execute {
+                    shutdownServer()
+                    bootPythonBackend()
+                }
             }
             ACTION_START -> {
                 val state = currentState
@@ -174,6 +244,7 @@ class ClipFlowBackendService : Service() {
             Log.e(TAG, "[FASTAPI_SERVER_FAILED] Failed to start Python backend: $errorMsg\n$stackTrace", e)
             currentState = BackendState.Error(errorMsg, stackTrace)
             lastErrorMessage = errorMsg
+            lastErrorDetails = stackTrace
             updateNotification("Engine error: $errorMsg")
         }
     }
@@ -197,8 +268,9 @@ class ClipFlowBackendService : Service() {
     private fun extractWebAssetsIfNeeded(destDir: File) {
         val versionFile = File(destDir, ".version")
         val currentCode = BuildConfig.VERSION_CODE.toString()
+        val indexHtml = File(destDir, "index.html")
 
-        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentCode) {
+        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentCode && indexHtml.exists() && indexHtml.length() > 0) {
             return // Up to date
         }
 
