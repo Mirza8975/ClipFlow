@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import config
+from . import config, tools as _tools
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -79,6 +79,7 @@ def site_allowed(url: str) -> bool:
 
 
 def run(cmd, cwd=None, timeout=3600):
+    cmd = _tools.cmd(cmd)
     try:
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", creationflags=NO_WINDOW, timeout=timeout)

@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import tools as _tools
+
 W, H = 320, 180            # the picture is looked at small: only the lines matter
 MAX_FRAMES = 24            # frames spread through the video
 MIN_SIZE = 0.12            # the smallest a webcam may be, as a part of the width or height
@@ -51,9 +53,9 @@ def _frames(path: str | Path, count: int = MAX_FRAMES) -> np.ndarray:
         dur = _duration(path)
         rate = max(count / dur, 0.02) if dur > 0 else 0.2
         proc = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(path),
+            _tools.cmd(["ffmpeg", "-v", "error", "-i", str(path),
              "-vf", f"fps={rate:.4f},scale={W}:{H},format=gray",
-             "-frames:v", str(count), "-f", "rawvideo", "-"],
+             "-frames:v", str(count), "-f", "rawvideo", "-"]),
             capture_output=True, timeout=180)
     except Exception:  # noqa: BLE001 - no ffmpeg or an unreadable file: no facecam, not a failure
         return np.zeros((0, H, W), dtype=np.uint8)
@@ -67,8 +69,8 @@ def _frames(path: str | Path, count: int = MAX_FRAMES) -> np.ndarray:
 
 def _duration(path: str | Path) -> float:
     try:
-        proc = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                               "-of", "default=nw=1:nk=1", str(path)],
+        proc = subprocess.run(_tools.cmd(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                               "-of", "default=nw=1:nk=1", str(path)]),
                               capture_output=True, text=True, timeout=60)
         return float((proc.stdout or "").strip() or 0)
     except Exception:  # noqa: BLE001
@@ -100,8 +102,8 @@ def _peaks(profile: np.ndarray, limit: int) -> list[tuple[int, float]]:
 
 
 def _size(path: str | Path) -> tuple[int, int]:
-    proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                           "-show_entries", "stream=width,height", "-of", "default=nw=1", str(path)],
+    proc = subprocess.run(_tools.cmd(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                           "-show_entries", "stream=width,height", "-of", "default=nw=1", str(path)]),
                           capture_output=True, text=True, timeout=60)
     w = h = 0
     for line in (proc.stdout or "").splitlines():
@@ -202,8 +204,8 @@ def _full_frame(path: str | Path) -> np.ndarray | None:
         return None
     try:
         raw = subprocess.run(
-            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
-             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+            _tools.cmd(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
+             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]),
             capture_output=True, timeout=120).stdout or b""
     except Exception:  # noqa: BLE001
         return None
@@ -285,9 +287,9 @@ def _frame_jpeg(path: str | Path, width: int = 768) -> bytes:
     """One frame of the stream, small, as a JPEG: what a model is shown."""
     try:
         return subprocess.run(
-            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
+            _tools.cmd(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
              "-frames:v", "1", "-vf", f"scale={width}:-2", "-pix_fmt", "yuvj420p", "-q:v", "4",
-             "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+             "-f", "image2pipe", "-vcodec", "mjpeg", "-"]),
             capture_output=True, timeout=120).stdout or b""
     except Exception:  # noqa: BLE001
         return b""

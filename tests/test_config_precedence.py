@@ -53,6 +53,11 @@ os.environ.pop("DATABASE_URL_TEST", None)
 # 5. Tools detection regression
 missing = tools.missing()
 check("tools.missing() returns list", isinstance(missing, list), True)
+check("tools.get_ffmpeg() returns non-empty string", bool(tools.get_ffmpeg()), True)
+check("tools.get_ffprobe() returns non-empty string", bool(tools.get_ffprobe()), True)
+check("tools.cmd(['ffmpeg', '-y']) replaces command name", tools.cmd(["ffmpeg", "-y"])[0] == tools.get_ffmpeg(), True)
+check("tools.cmd(['ffprobe', '-i']) replaces command name", tools.cmd(["ffprobe", "-i"])[0] == tools.get_ffprobe(), True)
+check("tools.cmd(['other', 'arg']) preserves other commands", tools.cmd(["other", "arg"]) == ["other", "arg"], True)
 
 if fails:
     print(f"\n{len(fails)} checks failed.")

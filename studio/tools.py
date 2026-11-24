@@ -16,6 +16,7 @@ HELP = ("PeakCut needs ffmpeg to work on video, and it isn't installed on this c
            "Run:  brew install ffmpeg" if sys.platform == "darwin" else "Run:  sudo apt install ffmpeg")
         + "  Then close PeakCut and start it again.")
 _seen = {"at": 0.0, "missing": list(NEEDED)}
+_BINARIES: dict[str, str] = {}
 
 
 def _places() -> list:
@@ -50,35 +51,77 @@ def setup() -> list:
     exe = ".exe" if sys.platform == "win32" else ""
     missing = []
     for name in NEEDED:
-        if shutil.which(name):
-            continue
-        for d in _places():
-            try:
-                target = d / (name + exe)
-                if target.is_file():
-                    os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-                    break
-                so_target = d / f"lib{name}.so"
-                if so_target.is_file():
-                    root_dir = Path(os.environ.get("CLIPFLOW_ROOT") or os.environ.get("PEAKCUT_ROOT") or Path(__file__).resolve().parent.parent)
-                    data_dir = Path(os.environ.get("CLIPFLOW_DATA") or os.environ.get("PEAKCUT_DATA") or (root_dir / "data"))
-                    bin_dir = data_dir / "bin"
-                    bin_dir.mkdir(parents=True, exist_ok=True)
-                    sym = bin_dir / name
-                    if not sym.exists():
-                        try:
-                            sym.symlink_to(so_target)
-                        except OSError:
-                            pass
-                    if sym.is_file():
-                        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+        found = None
+
+        # 1. Direct explicit environment variable override
+        env_var = os.environ.get(f"CLIPFLOW_{name.upper()}_PATH") or os.environ.get(f"PEAKCUT_{name.upper()}_PATH")
+        if env_var and Path(env_var).is_file():
+            found = str(Path(env_var).resolve())
+
+        # 2. Check if already on system PATH
+        if not found:
+            which = shutil.which(name)
+            if which:
+                found = which
+
+        # 3. Check well-known installation folders and Android nativeLibraryDir
+        if not found:
+            for d in _places():
+                try:
+                    # Standard executable binary (ffmpeg / ffmpeg.exe)
+                    target = d / (name + exe)
+                    if target.is_file():
+                        found = str(target.resolve())
+                        if str(d) not in os.environ.get("PATH", "").split(os.pathsep):
+                            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
                         break
-            except OSError:
-                pass
-        if not shutil.which(name):
+
+                    # Android native library packaging convention (libffmpeg.so / libffprobe.so)
+                    # In Android APKs, ELF executables in nativeLibraryDir are named lib*.so.
+                    # They MUST be executed directly by their absolute path: NEVER symlinked to app-data directories,
+                    # because Android 10+ mounts /data/data with noexec, causing [Errno 13] Permission denied.
+                    so_target = d / f"lib{name}.so"
+                    if so_target.is_file():
+                        found = str(so_target.resolve())
+                        break
+                except OSError:
+                    pass
+
+        if found:
+            _BINARIES[name] = found
+        else:
+            _BINARIES[name] = name
             missing.append(name)
+
     _seen.update(at=time.time(), missing=missing)
     return missing
+
+
+def get_binary(name: str) -> str:
+    """Return the resolved executable name or absolute path for ffmpeg or ffprobe."""
+    if name not in _BINARIES:
+        setup()
+    return _BINARIES.get(name, name)
+
+
+def get_ffmpeg() -> str:
+    """Return the resolved executable path or command for ffmpeg."""
+    return get_binary("ffmpeg")
+
+
+def get_ffprobe() -> str:
+    """Return the resolved executable path or command for ffprobe."""
+    return get_binary("ffprobe")
+
+
+def cmd(command_list: list) -> list:
+    """Translate a command list like ['ffmpeg', ...] to use the resolved binary path."""
+    if not command_list:
+        return command_list
+    first = str(command_list[0])
+    if first in NEEDED:
+        return [get_binary(first)] + list(command_list[1:])
+    return list(command_list)
 
 
 def missing() -> list:

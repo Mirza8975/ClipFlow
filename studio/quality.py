@@ -21,7 +21,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import config
+from . import config, tools as _tools
 
 _FFMPEG = "ffmpeg"
 
@@ -36,7 +36,7 @@ def motion_map(path: str | Path, bucket: float = 2.0) -> list[tuple[float, float
     frozen screen, high for anything actually moving."""
     try:
         proc = subprocess.run(
-            [_FFMPEG, "-hide_banner", "-loglevel", "error",
+            [_tools.get_ffmpeg(), "-hide_banner", "-loglevel", "error",
              "-i", str(path),
              "-vf", "tblend=all_mode=difference,signalstats,metadata=print:file=-",
              "-an", "-f", "null", "-"],

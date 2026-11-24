@@ -34,6 +34,33 @@ tools._places = real_places
 check("PEAKCUT_FFMPEG_DIR is looked in first", tools._places()[0], Path(hidden))
 tools.setup()
 
+# ---- Android lib*.so native binary resolution test (W^X SELinux compliance)
+android_jni_dir = tempfile.mkdtemp(prefix="pc-android-jni-")
+for name in tools.NEEDED:
+    so_file = Path(android_jni_dir) / f"lib{name}.so"
+    so_file.write_bytes(b"mock_elf_binary")
+    so_file.chmod(0o755)
+
+os.environ["CLIPFLOW_FFMPEG_DIR"] = android_jni_dir
+saved_path = os.environ.get("PATH", "")
+os.environ["PATH"] = tempfile.mkdtemp(prefix="pc-empty-")
+tools._places = lambda: [Path(android_jni_dir)]
+tools.setup()
+
+check("Android libffmpeg.so is detected as available", "ffmpeg" in tools.missing(), False)
+check("Android libffprobe.so is detected as available", "ffprobe" in tools.missing(), False)
+check("tools.get_ffmpeg() returns libffmpeg.so path", tools.get_ffmpeg(), str(Path(android_jni_dir) / "libffmpeg.so"))
+check("tools.get_ffprobe() returns libffprobe.so path", tools.get_ffprobe(), str(Path(android_jni_dir) / "libffprobe.so"))
+check("tools.cmd(['ffmpeg', '-i']) translates command index 0", tools.cmd(["ffmpeg", "-i"])[0], str(Path(android_jni_dir) / "libffmpeg.so"))
+check("no data/bin symlink was created on Android", not (Path(os.environ["PEAKCUT_DATA"]) / "bin" / "ffmpeg").exists(), True)
+
+# Restore environment
+os.environ.pop("CLIPFLOW_FFMPEG_DIR", None)
+os.environ["PATH"] = saved_path
+shutil.rmtree(android_jni_dir, ignore_errors=True)
+tools._places = real_places
+tools.setup()
+
 # ---- the speech model
 d = config.ASR_MODEL_DIR
 assert str(d).startswith(os.environ["PEAKCUT_DATA"]), "the test must only touch its own folder"
