@@ -25,6 +25,12 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     signingConfigs {
         create("release") {
             val keystorePath = project.findProperty("android.injected.signing.store.file") as? String

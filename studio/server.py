@@ -109,8 +109,8 @@ def _startup():
         STARTUP_STATE["warnings"].append(msg)
 
     try:
-        if _tools.missing():
-            print("\n  " + _tools.HELP + "\n", flush=True)
+        if _tools.missing(force=True):
+            print("\n  " + _tools.get_help() + "\n", flush=True)
     except Exception as e:
         msg = f"Tools verification notice: {e}"
         print(f"[ClipFlow] {msg}", flush=True)
@@ -750,7 +750,10 @@ def status(request: Request):
     from . import notices
     from . import updates
     me_ = _me(request)
-    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
+    missing_tools = _tools.missing()
+    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(),
+            "no_ffmpeg": bool(missing_tools), "ffmpeg_help": _tools.get_help() if missing_tools else "", "is_android": _tools.is_android(),
+            "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS, "safe_margins": getattr(render, "SAFE_MARGINS", {}), "speech": _speech_brief()}
@@ -773,7 +776,7 @@ def _job_or_404(jid: str):
 def _job_slots():
     from . import tools
     if tools.missing():
-        raise HTTPException(503, tools.HELP)
+        raise HTTPException(503, tools.get_help())
     if jobs.busy_count() >= config.MAX_ACTIVE_JOBS_PER_USER:
         raise HTTPException(429, f"You already have {config.MAX_ACTIVE_JOBS_PER_USER} videos in progress. Wait for one to finish.")
 

@@ -14,15 +14,13 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, ".")
 
 fails = []
-passed_count = 0
-skipped_count = 0
+_counts = {"passed": 0, "skipped": 0}
 
 
 def check(name, got, want=True):
-    global passed_count
     ok = want(got) if callable(want) else got == want
     if ok:
-        passed_count += 1
+        _counts["passed"] += 1
         print(f"PASS {name}")
     else:
         fails.append(name)
@@ -30,8 +28,7 @@ def check(name, got, want=True):
 
 
 def skip(name, reason="numpy not installed in local environment"):
-    global skipped_count
-    skipped_count += 1
+    _counts["skipped"] += 1
     print(f"SKIP {name} ({reason})")
 
 
@@ -196,7 +193,7 @@ else:
     skip("loudness_per_second calculates second block louder")
     skip("find_offset correctly finds offset within tolerance")
 
-print(f"\n--- Test Results: {passed_count} passed, {len(fails)} failed, {skipped_count} skipped ---")
+print(f"\n--- Test Results: {_counts['passed']} passed, {len(fails)} failed, {_counts['skipped']} skipped ---")
 
 if fails:
     print(f"\n{len(fails)} audio adapter checks failed: {fails}")

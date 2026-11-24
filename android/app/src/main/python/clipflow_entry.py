@@ -83,12 +83,30 @@ def setup_environment(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 
         sys.path.insert(0, this_dir)
 
     # Add native library directory to PATH for ffmpeg and ffprobe
+    os.environ["CLIPFLOW_ANDROID"] = "1"
     if ffmpeg_dir:
         os.environ["CLIPFLOW_FFMPEG_DIR"] = ffmpeg_dir
         os.environ["PEAKCUT_FFMPEG_DIR"] = ffmpeg_dir
         cur_path = os.environ.get("PATH", "")
         if ffmpeg_dir not in cur_path:
             os.environ["PATH"] = ffmpeg_dir + os.pathsep + cur_path
+
+        p_dir = Path(ffmpeg_dir)
+        ff_bin = p_dir / "libffmpeg.so"
+        if not ff_bin.is_file():
+            ff_bin = p_dir / "ffmpeg"
+        if ff_bin.is_file():
+            os.environ["CLIPFLOW_FFMPEG_PATH"] = str(ff_bin.resolve())
+            os.environ["PEAKCUT_FFMPEG_PATH"] = str(ff_bin.resolve())
+            _log("i", f"[FFMPEG_RESOLVED] Found bundled ffmpeg binary at: {ff_bin}")
+
+        probe_bin = p_dir / "libffprobe.so"
+        if not probe_bin.is_file():
+            probe_bin = p_dir / "ffprobe"
+        if probe_bin.is_file():
+            os.environ["CLIPFLOW_FFPROBE_PATH"] = str(probe_bin.resolve())
+            os.environ["PEAKCUT_FFPROBE_PATH"] = str(probe_bin.resolve())
+            _log("i", f"[FFPROBE_RESOLVED] Found bundled ffprobe binary at: {probe_bin}")
 
 
 def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765, timeout: float = 35.0) -> bool:
@@ -122,6 +140,12 @@ def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765,
     try:
         import uvicorn
         from studio.server import app
+        from studio import tools as _tools
+        missing_tools = _tools.setup(force=True)
+        if not missing_tools:
+            _log("i", f"[FFMPEG_CAPABILITY_VERIFIED] Tools ready: ffmpeg={_tools.get_ffmpeg()}, ffprobe={_tools.get_ffprobe()}")
+        else:
+            _log("w", f"[FFMPEG_CAPABILITY_WARNING] Missing tools after setup: {missing_tools}. Help: {_tools.get_help()}")
     except Exception as e:
         tb = traceback.format_exc()
         err_msg = f"Failed to import studio.server: {e}\n{tb}"

@@ -225,6 +225,26 @@ class ClipFlowBackendService : Service() {
             Log.i(TAG, "[FASTAPI_SERVER_STARTING] Invoking clipflow_entry.start_server...")
             val entry = py.getModule("clipflow_entry")
             val nativeLibDir = applicationInfo.nativeLibraryDir
+            val nativeLibDirFile = File(nativeLibDir)
+            Log.i(TAG, "[NATIVE_LIBS] nativeLibraryDir path: $nativeLibDir (exists: ${nativeLibDirFile.exists()})")
+
+            val ffmpegSo = File(nativeLibDirFile, "libffmpeg.so")
+            val ffprobeSo = File(nativeLibDirFile, "libffprobe.so")
+            if (ffmpegSo.exists()) {
+                ffmpegSo.setExecutable(true, false)
+                Log.i(TAG, "[NATIVE_LIBS] libffmpeg.so found: ${ffmpegSo.absolutePath} (size=${ffmpegSo.length()}B, executable=${ffmpegSo.canExecute()})")
+            } else {
+                Log.w(TAG, "[NATIVE_LIBS_WARNING] libffmpeg.so not found in $nativeLibDir")
+            }
+            if (ffprobeSo.exists()) {
+                ffprobeSo.setExecutable(true, false)
+                Log.i(TAG, "[NATIVE_LIBS] libffprobe.so found: ${ffprobeSo.absolutePath} (size=${ffprobeSo.length()}B, executable=${ffprobeSo.canExecute()})")
+            } else {
+                Log.w(TAG, "[NATIVE_LIBS_WARNING] libffprobe.so not found in $nativeLibDir")
+            }
+
+            val dirContents = nativeLibDirFile.listFiles()?.map { it.name } ?: emptyList()
+            Log.i(TAG, "[NATIVE_LIBS] All libraries in nativeLibraryDir: $dirContents")
 
             entry.callAttr(
                 "start_server",

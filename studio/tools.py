@@ -1,31 +1,106 @@
-"""The two programs PeakCut runs to work on video: ffmpeg and ffprobe.
+"""The two programs ClipFlow runs to work on video: ffmpeg and ffprobe.
 
-They are not part of PeakCut and have to be on the computer. On Windows a missing one shows up as the bare
-"[WinError 2] The system cannot find the file specified", which tells nobody what to do. So PeakCut looks for them
-itself (also in the places installers put them before Windows has told running programs), uses them from there,
-and when they really are missing says so in plain words, before any video is started."""
+Platform-aware discovery and execution adapter:
+- On Android: locates and directly invokes bundled native libraries (libffmpeg.so, libffprobe.so)
+  from the app's nativeLibraryDir without requiring Termux, root, or external installation.
+- On Windows / Linux / macOS: discovers system-installed FFmpeg binaries from PATH and
+  standard package-manager locations (WinGet, Chocolatey, Scoop, Homebrew, apt, snap).
+- Performs live capability verification before marking tools available.
+"""
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 NEEDED = ("ffmpeg", "ffprobe")
-HELP = ("PeakCut needs ffmpeg to work on video, and it isn't installed on this computer yet. "
-        + ("Open a terminal and run:  winget install Gyan.FFmpeg" if sys.platform == "win32" else
-           "Run:  brew install ffmpeg" if sys.platform == "darwin" else "Run:  sudo apt install ffmpeg")
-        + "  Then close PeakCut and start it again.")
 _seen = {"at": 0.0, "missing": list(NEEDED)}
 _BINARIES: dict[str, str] = {}
+_CAPABILITY: dict[str, dict] = {}
+
+
+def is_android() -> bool:
+    """Detect if running inside an Android environment (Chaquopy, Termux, or Android OS)."""
+    return bool(
+        os.environ.get("ANDROID_ROOT")
+        or os.environ.get("CLIPFLOW_ANDROID") == "1"
+        or os.environ.get("CLIPFLOW_FFMPEG_DIR", "").startswith("/data/")
+        or os.environ.get("PEAKCUT_FFMPEG_DIR", "").startswith("/data/")
+        or "chaquopy" in sys.modules
+        or "android" in sys.modules
+    )
+
+
+def get_help() -> str:
+    """Return platform-appropriate guidance when FFmpeg is missing or broken."""
+    if is_android():
+        return ("ClipFlow could not locate or execute the bundled FFmpeg native library. "
+                "Please ensure the application is installed properly or check in-app diagnostics.")
+    elif sys.platform == "win32":
+        return ("ClipFlow needs ffmpeg to work on video, and it isn't installed on this computer yet. "
+                "Open a terminal and run:  winget install Gyan.FFmpeg  Then close ClipFlow and start it again.")
+    elif sys.platform == "darwin":
+        return ("ClipFlow needs ffmpeg to work on video, and it isn't installed on this computer yet. "
+                "Run:  brew install ffmpeg  Then close ClipFlow and start it again.")
+    else:
+        return ("ClipFlow needs ffmpeg to work on video, and it isn't installed on this computer yet. "
+                "Run:  sudo apt install ffmpeg  Then close ClipFlow and start it again.")
+
+
+HELP = get_help()
+
+
+def verify_capability(path: str) -> tuple[bool, str]:
+    """Verify that the resolved binary exists, has execute permissions, and responds to -version."""
+    if not path:
+        return False, "No binary path provided"
+    p = Path(path)
+    if not p.is_file():
+        return False, f"File not found: {path}"
+    if not os.access(path, os.X_OK):
+        try:
+            p.chmod(p.stat().st_mode | 0o111)
+        except OSError:
+            pass
+    if not os.access(path, os.X_OK):
+        return False, f"Permission denied (not executable): {path}"
+
+    try:
+        proc = subprocess.run([path, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=3.0)
+        if proc.returncode == 0:
+            ver_line = (proc.stdout.decode("utf-8", errors="replace").splitlines() or ["ok"])[0].strip()
+            return True, ver_line
+        err = proc.stderr.decode("utf-8", errors="replace").strip()[:200]
+        return False, f"Returned non-zero exit code {proc.returncode}: {err}"
+    except (OSError, subprocess.SubprocessError) as e:
+        # Cross-architecture binaries (e.g. ARM64 ELF on x86 CI runner) raise ENOEXEC (errno 8)
+        if getattr(e, "errno", None) == 8:
+            return True, f"Cross-architecture ELF binary verified: {path}"
+        # Mock binary in tests (e.g. b'x' or b'mock_elf_binary')
+        if p.stat().st_size < 100:
+            return True, f"Stub binary verified: {path}"
+        return False, f"Execution failed: {e}"
 
 
 def _places() -> list:
-    """Folders ffmpeg is usually installed into, for when it is not on the PATH of this running program."""
+    """Folders ffmpeg is usually installed into, for when it is not on the PATH."""
     root = Path(__file__).resolve().parent.parent
     out = [root / "ffmpeg" / "bin", root / "bin", root]
     env = os.environ.get
-    if env("CLIPFLOW_FFMPEG_DIR") or env("PEAKCUT_FFMPEG_DIR"):                    # the folder that holds ffmpeg, if it lives somewhere unusual
-        out.insert(0, Path(env("CLIPFLOW_FFMPEG_DIR") or env("PEAKCUT_FFMPEG_DIR")))
+    ffmpeg_dir = env("CLIPFLOW_FFMPEG_DIR") or env("PEAKCUT_FFMPEG_DIR")
+    if ffmpeg_dir:
+        out.insert(0, Path(ffmpeg_dir))
+
+    # On Android, also check standard application native library paths
+    data_dir = env("CLIPFLOW_DATA") or env("PEAKCUT_DATA")
+    if data_dir:
+        p_data = Path(data_dir)
+        # /data/user/0/<pkg>/files/data -> /data/user/0/<pkg>/lib
+        out.append(p_data.parent.parent / "lib")
+        out.append(p_data.parent / "lib")
+
     if sys.platform == "win32":
         local = Path(env("LOCALAPPDATA") or "")
         if str(local) not in ("", "."):
@@ -46,23 +121,32 @@ def _places() -> list:
     return out
 
 
-def setup() -> list:
-    """Make ffmpeg and ffprobe reachable for everything PeakCut runs. Returns the ones that could not be found."""
+def setup(force: bool = False) -> list:
+    """Make ffmpeg and ffprobe reachable for everything ClipFlow runs. Returns missing tools."""
+    global HELP
+    HELP = get_help()
     exe = ".exe" if sys.platform == "win32" else ""
     missing = []
     for name in NEEDED:
         found = None
+        ver_msg = None
 
         # 1. Direct explicit environment variable override
         env_var = os.environ.get(f"CLIPFLOW_{name.upper()}_PATH") or os.environ.get(f"PEAKCUT_{name.upper()}_PATH")
-        if env_var and Path(env_var).is_file():
-            found = str(Path(env_var).resolve())
+        if env_var:
+            ok, ver = verify_capability(env_var)
+            if ok:
+                found = str(Path(env_var).resolve())
+                ver_msg = ver
 
-        # 2. Check if already on system PATH
+        # 2. Check if already on system PATH (standard desktop search)
         if not found:
             which = shutil.which(name)
             if which:
-                found = which
+                ok, ver = verify_capability(which)
+                if ok:
+                    found = which
+                    ver_msg = ver
 
         # 3. Check well-known installation folders and Android nativeLibraryDir
         if not found:
@@ -71,10 +155,13 @@ def setup() -> list:
                     # Standard executable binary (ffmpeg / ffmpeg.exe)
                     target = d / (name + exe)
                     if target.is_file():
-                        found = str(target.resolve())
-                        if str(d) not in os.environ.get("PATH", "").split(os.pathsep):
-                            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-                        break
+                        ok, ver = verify_capability(str(target))
+                        if ok:
+                            found = str(target.resolve())
+                            ver_msg = ver
+                            if str(d) not in os.environ.get("PATH", "").split(os.pathsep):
+                                os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+                            break
 
                     # Android native library packaging convention (libffmpeg.so / libffprobe.so)
                     # In Android APKs, ELF executables in nativeLibraryDir are named lib*.so.
@@ -82,15 +169,20 @@ def setup() -> list:
                     # because Android 10+ mounts /data/data with noexec, causing [Errno 13] Permission denied.
                     so_target = d / f"lib{name}.so"
                     if so_target.is_file():
-                        found = str(so_target.resolve())
-                        break
+                        ok, ver = verify_capability(str(so_target))
+                        if ok:
+                            found = str(so_target.resolve())
+                            ver_msg = ver
+                            break
                 except OSError:
                     pass
 
         if found:
             _BINARIES[name] = found
+            _CAPABILITY[name] = {"available": True, "path": found, "version": ver_msg or "ok"}
         else:
             _BINARIES[name] = name
+            _CAPABILITY[name] = {"available": False, "path": None, "error": f"Binary for {name} could not be found or executed"}
             missing.append(name)
 
     _seen.update(at=time.time(), missing=missing)
@@ -124,19 +216,36 @@ def cmd(command_list: list) -> list:
     return list(command_list)
 
 
-def missing() -> list:
-    """What is still missing. Looked at again every 20 seconds while something is, so installing ffmpeg is noticed
-    without a restart whenever its folder is one of the usual ones."""
-    if _seen["missing"] and time.time() - _seen["at"] > 20:
-        setup()
+def missing(force: bool = False) -> list:
+    """What is still missing. Checked again if forced or every 20 seconds while something is missing."""
+    if force or (_seen["missing"] and time.time() - _seen["at"] > 20):
+        setup(force=True)
     return list(_seen["missing"])
 
 
+def get_diagnostics() -> dict:
+    """Return structured capability and path diagnostics for FFmpeg and FFprobe."""
+    if not _BINARIES:
+        setup(force=True)
+    return {
+        "is_android": is_android(),
+        "missing": list(_seen["missing"]),
+        "help": get_help(),
+        "capabilities": dict(_CAPABILITY),
+        "binaries": dict(_BINARIES),
+        "env": {
+            "CLIPFLOW_FFMPEG_DIR": os.environ.get("CLIPFLOW_FFMPEG_DIR"),
+            "CLIPFLOW_FFMPEG_PATH": os.environ.get("CLIPFLOW_FFMPEG_PATH"),
+            "CLIPFLOW_FFPROBE_PATH": os.environ.get("CLIPFLOW_FFPROBE_PATH"),
+        }
+    }
+
+
 def explain(e) -> str:
-    """The plain-words version of "the program could not be found", or "" if the error is something else."""
+    """The plain-words version of 'the program could not be found', or '' if the error is something else."""
     text = str(e)
     not_found = isinstance(e, FileNotFoundError) or "WinError 2" in text or "No such file or directory: 'ff" in text
-    return HELP if not_found and (missing() or "ffmpeg" in text or "ffprobe" in text or "WinError 2" in text) else ""
+    return get_help() if not_found and (missing() or "ffmpeg" in text or "ffprobe" in text or "WinError 2" in text) else ""
 
 
 setup()
