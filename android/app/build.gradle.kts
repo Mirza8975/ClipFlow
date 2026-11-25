@@ -95,6 +95,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // sherpa-onnx offline speech-to-text native AAR (ARM64)
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
     testImplementation("junit:junit:4.13.2")
 }
 

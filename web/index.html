@@ -17,7 +17,7 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@300&family=Archivo+Black&family=Anton&family=Poppins:wght@800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Inter:wght@300&family=Archivo+Black&family=Anton&family=Poppins:wght@800&display=swap" rel="stylesheet">
 <style>
 :root{
   --brand:#6366F1;--brand-press:#4F46E5;--brand-ink:#FFFFFF;--brand-soft:rgba(99,102,241,0.14);--brand-line:rgba(99,102,241,0.32);--brand-deep:#818CF8;
@@ -31,7 +31,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%;height:100dvh}
-body{margin:0;background:var(--frame);color:var(--text);font:14px/1.5 "Geist","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--frame);color:var(--text);font:14px/1.5 "Geist","Noto Sans Devanagari","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden;-webkit-tap-highlight-color:transparent}
 h1,h2,h3,h4,p{margin:0}
 button,input,select,textarea{font:inherit;color:inherit;-webkit-tap-highlight-color:transparent}
 svg{width:18px;height:18px;flex:none;fill:currentColor}
@@ -1114,6 +1114,36 @@ dialog[open]{animation:fadein .16s ease}
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const I18N = {
+  en: {
+    home: "Home", clips: "Clips", new_clip: "New Clip", activity: "Activity", settings: "Settings",
+    all_videos: "All videos", ai_usage: "AI usage", creators: "Creators", new_creator: "New creator",
+    connected_apps: "Connected apps", speech_models: "Speech models", storage: "Storage",
+    profile: "Profile", security: "Security", app_language: "Language", lang_sub: "Choose app display language",
+    lang_help: "Select the display language for the ClipFlow user interface.", choose_language: "Interface Language",
+    make_clips: "Make clips", save: "Save", discard: "Discard", cancel: "Cancel", upload: "Upload",
+    paste_link: "Paste a video link", spoken_language: "Spoken language", default_lang: "Default",
+    ready: "Ready", downloading: "Downloading", download: "Download", remove: "Remove", ai: "AI",
+    ai_sub: "Your AI service, model and key", profile_sub: "Your name, email and how you sign in",
+    security_sub: "Password and signing out", apps_sub: "Where your clips get posted",
+    speech_sub: "The languages ClipFlow can hear", storage_sub: "Where videos and clips are kept"
+  },
+  hi: {
+    home: "होम", clips: "क्लिप्स", new_clip: "नई क्लिप", activity: "गतिविधि", settings: "सेटिंग्स",
+    all_videos: "सभी वीडियो", ai_usage: "AI उपयोग", creators: "क्रिएटर्स", new_creator: "नया क्रिएटर",
+    connected_apps: "जुड़े ऐप्स", speech_models: "स्पीच मॉडल", storage: "स्टोरेज",
+    profile: "प्रोफ़ाइल", security: "सुरक्षा", app_language: "भाषा (Language)", lang_sub: "ऐप की भाषा चुनें",
+    lang_help: "ClipFlow यूजर इंटरफेस के लिए अपनी पसंदीदा भाषा चुनें।", choose_language: "इंटरफ़ेस भाषा",
+    make_clips: "क्लिप्स बनाएं", save: "सहेजें", discard: "रद्द करें", cancel: "रद्द करें", upload: "अपलोड करें",
+    paste_link: "वीडियो लिंक पेस्ट करें", spoken_language: "बोली जाने वाली भाषा", default_lang: "डिफ़ॉल्ट",
+    ready: "तैयार है", downloading: "डाउनलोड हो रहा है", download: "डाउनलोड करें", remove: "हटाएं", ai: "AI",
+    ai_sub: "आपकी AI सेवा, मॉडल और कुंजी", profile_sub: "आपका नाम, ईमेल और साइन-इन विवरण",
+    security_sub: "पासवर्ड और साइन-आउट", apps_sub: "सोशल मीडिया अकाउंट्स",
+    speech_sub: "ClipFlow द्वारा समर्थित भाषाएं", storage_sub: "वीडियो और क्लिप्स स्टोरेज"
+  }
+};
+const currentLang = () => { try { return localStorage.getItem("clipflow_ui_lang") || "en"; } catch { return "en"; } };
+const t = (k, def) => (I18N[currentLang()] && I18N[currentLang()][k]) || def || k;
 const I = {
  "github": "<path fill-rule=\"evenodd\" transform=\"scale(16)\" d=\"M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z\"/>",
  "instagram": "<rect x=\"32\" y=\"32\" width=\"192\" height=\"192\" rx=\"56\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"18\"/><circle cx=\"128\" cy=\"128\" r=\"42\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"18\"/><circle cx=\"184\" cy=\"72\" r=\"13\"/>",
@@ -1519,26 +1549,36 @@ function moveInd() {
   lastInd = {x, w};
 }
 function drawShell() {  const nav = (v, icon, label, extra = "") => `<button class="nav-item ${S.view === v ? "on" : ""}" data-act="go" data-v="${esc(v)}" title="${esc(label)}">${icon}<span class="label">${esc(label)}</span>${extra}</button>`;
-  put($("#nav"), nav("overview", navIc("home", "overview"), "Home") +
-    nav("library", navIc("film", "library"), "All videos", (() => { const w = S.jobs.filter(j => ["queued", "running"].includes(j.status)).length;
+  put($("#nav"), nav("overview", navIc("home", "overview"), t("home", "Home")) +
+    nav("library", navIc("film", "library"), t("all_videos", "All videos"), (() => { const w = S.jobs.filter(j => ["queued", "running"].includes(j.status)).length;
       return w ? `<span class="working" title="${w} working now"><i></i>${w} working</span>` : S.jobs.length ? `<span class="count">${S.jobs.length}</span>` : ""; })()) +
-    `<h4><span>Creators</span></h4>` +
+    `<h4><span>${esc(t("creators", "Creators"))}</span></h4>` +
     S.creators.map(c => nav("c:" + c.id, cav(c), c.name,
       c.live_job ? `<span class="sb-tag rec" title="Recording now"><i></i>Rec</span>`
         : liveOn(c).length ? `<span class="sb-tag" title="Live on ${esc(liveOn(c).map(([k]) => PLAT[k].name).join(" and "))}"><i></i>Live</span>` : "")).join("") +
-    `<button class="nav-item" data-act="newcreator" title="New creator">${ic("plusc")}<span class="label">New creator</span></button>` +
+    `<button class="nav-item" data-act="newcreator" title="${esc(t("new_creator", "New creator"))}">${ic("plusc")}<span class="label">${esc(t("new_creator", "New creator"))}</span></button>` +
     (S.status.user?.role === "admin" && S.status.accounts !== false ? `<h4><span>Owner</span></h4><a class="nav-item" href="/admin" title="Admin dashboard" style="text-decoration:none">${ic("shield")}<span class="label">Admin dashboard</span></a>` : ""));
   const st = S.status;
   const k = S.status.ai;
   $$("#mobileNav .mob-tab[data-v]")?.forEach(b => b.classList.toggle("on", S.view === b.dataset.v));
+  const mob = $("#mobileNav");
+  if (mob) {
+    const spans = mob.querySelectorAll(".mob-tab span");
+    if (spans.length >= 4) {
+      spans[0].textContent = t("home", "Home");
+      spans[1].textContent = t("clips", "Clips");
+      spans[2].textContent = t("activity", "Activity");
+      spans[3].textContent = t("settings", "Settings");
+    }
+  }
   put($("#foot"), (k ? `<button class="ai-card ${S.view === "usage" ? "on" : ""}" data-act="go" data-v="usage" title="${k.ready ? `AI: ${esc(k.provider || "ready")}, ${k.today_calls || 0} calls today` : "The AI is not set up"}">
       <span class="ai-ic">${ic("bolt")}</span><span class="ai-tx"><small>AI</small><b>${k.ready ? esc(k.provider || "Ready") : "Not set up"}</b></span>${k.ready ? `<span class="ai-n">${(k.today_calls || 0).toLocaleString()} today</span>` : ""}</button>` : "") +
     (S.status.user ? `<div class="me"><button class="me-btn" data-act="acctmenu" aria-haspopup="menu" aria-expanded="false">${meAvatar(S.status.user)}
-      <span class="who">${S.status.accounts === false ? `<b>Settings</b><span>AI key, connected apps</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
+      <span class="who">${S.status.accounts === false ? `<b>${esc(t("settings", "Settings"))}</b><span>AI key, connected apps</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
       <button class="icon-btn bell" data-act="bell" title="Notifications" aria-label="Notifications${S.status.unread ? `, ${S.status.unread} new` : ""}" aria-haspopup="dialog">${ic("bell")}${S.status.unread ? `<span class="dotn">${S.status.unread > 9 ? "9+" : S.status.unread}</span>` : ""}</button></div>` : ""));
   const c = creator();
   const recording = S.creators.filter(x => x.live_job).length;
-  let title = {overview:"Home", library:"All videos", settings:"Settings", usage:"AI usage"}[S.view] || "", sub = "", act = "";
+  let title = {overview: t("home", "Home"), library: t("all_videos", "All videos"), settings: t("settings", "Settings"), usage: t("ai_usage", "AI usage")}[S.view] || "", sub = "", act = "";
   if (S.view === "usage") sub = "What the AI has been used for.";
   if (S.view === "overview") sub = `${greeting()}. ${S.creators.length} creator${S.creators.length === 1 ? "" : "s"}${recording ? `, ${recording} recording now` : ""}.`;
   if (S.view === "library") sub = "Every video and recording, across all creators.";
@@ -1549,7 +1589,7 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
     pic = cav(c);
     subHtml = statusBadge(c);
     const nJobs = S.jobs.filter(j => j.creator === c.id).length, nLog = (c.log || []).length;
-    tabs = [["clips", "Clips", "scissors", nJobs], ["setup", "Setup", "cog", 0], ["activity", "Activity", "clock", nLog]].map(([k, l, i, n]) =>
+    tabs = [["clips", t("clips", "Clips"), "scissors", nJobs], ["setup", "Setup", "cog", 0], ["activity", t("activity", "Activity"), "clock", nLog]].map(([k, l, i, n]) =>
       `<button class="tabbtn ${S.ctab === k ? "on" : ""}" data-act="tab" data-t="${k}" role="tab" aria-selected="${S.ctab === k}">${ic(i)}${l}${n ? `<span class="n">${n > 99 ? "99+" : n}</span>` : ""}</button>`).join("");
     act = c.live_job ? `<button class="btn danger" data-act="stoplive" data-j="${esc(c.live_job)}">${ic("stop")}Stop recording</button>`
                      : `<button class="btn primary" data-act="golive"><span class="rdot"></span>${liveOn(c).length ? "Record live stream" : "Start recording"}</button>`;
@@ -1585,7 +1625,7 @@ function pathFor(v, tab) {
 function fromPath(path) {
   const m = path.match(/^\/app\/creators\/([^/]+)(?:\/(setup|activity|clips))?\/?$/);
   if (m) return ["c:" + decodeURIComponent(m[1]), m[2] || "clips"];
-  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage))?\/?$/);
+  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|language|apps|speech|storage))?\/?$/);
   if (st) return ["settings", st[1] || null];
   const k = Object.keys(ROUTES).find(x => ROUTES[x] && path.replace(/\/$/, "") === "/app/" + ROUTES[x]);
   return [k || "overview", "clips"];
@@ -1669,13 +1709,13 @@ function drawAdd(variant) {
 const LAYOUT_SHORT = {blur:"Blurred fill", zoom:"Zoomed in", crop:"Fill screen", left:"Keep left", right:"Keep right", fit:"Black bars", split:"Split screen", gameplay:"Gameplay + facecam"};
 /* The language spoken in the video picks which speech model writes the transcript. Languages other than English
    need their model downloaded once (Settings → Speech models). */
-const LANG_NATIVE = {ar:"العربية"};
+const LANG_NATIVE = {hi: "हिन्दी", "hi-IN": "हिन्दी"};
 const speechLangs = () => S.status.speech || {en:{label:"English", state:"ready", size_mb:0}};
 const langName = k => { const m = speechLangs()[k]; return m ? m.label + (LANG_NATIVE[k] ? " · " + LANG_NATIVE[k] : "") : k; };
 function langSeg(val) {
   const L = speechLangs(); if (!L[val]) val = "en";
-  return `<div class="ob"><div class="ot">Spoken language</div><input type="hidden" id="o_lang" value="${esc(val)}"><div class="seg" role="group" aria-label="Spoken language">${Object.entries(L).map(([k, m]) =>
-    `<button type="button" data-seg="o_lang" data-v="${esc(k)}" aria-pressed="${k === val}">${esc(langName(k))}<small>${k === "en" ? "Default" : m.state === "ready" ? "Ready" : m.state === "downloading" ? "Downloading" : `Adds ${esc(m.size_mb)} MB once`}</small></button>`).join("")}</div></div>`;
+  return `<div class="ob"><div class="ot">${esc(t("spoken_language", "Spoken language"))}</div><input type="hidden" id="o_lang" value="${esc(val)}"><div class="seg" role="group" aria-label="${esc(t("spoken_language", "Spoken language"))}">${Object.entries(L).map(([k, m]) =>
+    `<button type="button" data-seg="o_lang" data-v="${esc(k)}" aria-pressed="${k === val}">${esc(langName(k))}<small>${k === "en" ? esc(t("default_lang", "Default")) : m.state === "ready" ? esc(t("ready", "Ready")) : m.state === "downloading" ? esc(t("downloading", "Downloading")) : `Adds ${esc(m.size_mb)} MB once`}</small></button>`).join("")}</div></div>`;
 }
 function setLang(v) {   // when the creator is changed in the add bar, their language comes with them
   const i = $("#o_lang"); if (!i || !speechLangs()[v]) return;
@@ -2310,12 +2350,13 @@ function drawUsage() {
 /* ============================================================ settings */
 // With sign-in off there is no profile or password to manage. The AI section is for whoever runs the server.
 const setTabs = () => [
-  ...(S.status.user?.is_admin ? [["ai", "AI", "bolt", "Your AI service, model and key"]] : []),
-  ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
-                                          ["security", "Security", "lock", "Password and signing out"]]),
-  ["apps", "Connected apps", "plug", "Where your clips get posted"],
-  ...(S.status.user?.is_admin ? [["speech", "Speech models", "chat", "The languages ClipFlow can hear"],
-                                 ["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
+  ...(S.status.user?.is_admin ? [["ai", t("ai", "AI"), "bolt", t("ai_sub", "Your AI service, model and key")]] : []),
+  ...(S.status.accounts === false ? [] : [["profile", t("profile", "Profile"), "user", t("profile_sub", "Your name, email and how you sign in")],
+                                          ["security", t("security", "Security"), "lock", t("security_sub", "Password and signing out")]]),
+  ["language", t("app_language", "Language"), "chat", t("lang_sub", "Choose app display language")],
+  ["apps", t("connected_apps", "Connected apps"), "plug", t("apps_sub", "Where your clips get posted")],
+  ...(S.status.user?.is_admin ? [["speech", t("speech_models", "Speech models"), "chat", t("speech_sub", "The languages ClipFlow can hear")],
+                                 ["storage", t("storage", "Storage"), "folder", t("storage_sub", "Where videos and clips are kept")]] : [])];
 function aiHints() {
   const k = S.ai, sel = $("#ai_provider"); if (!k || !sel) return;
   const pv = k.providers.find(x => x.id === sel.value) || k.providers[0], same = pv.id === k.provider;
@@ -2349,15 +2390,32 @@ async function drawSettings() {
     }
     if (tab === "speech") {
       const r = await api("/api/speech");
-      body.innerHTML = `<section class="set-sec"><h2>Speech models</h2><p class="help">ClipFlow writes down what is said in a video with a speech model that runs on this computer, one per language. English is always here. Add another language to clip videos spoken in it, then choose that language when adding a video, or on a creator's Setup.</p>
+      body.innerHTML = `<section class="set-sec"><h2>${esc(t("speech_models", "Speech models"))}</h2><p class="help">ClipFlow writes down what is said in a video with a speech model that runs on this computer, one per language. English is always here. Add another language to clip videos spoken in it, then choose that language when adding a video, or on a creator's Setup.</p>
         <div class="speech-list">${r.models.map(m => `<div class="speech-row"><div class="speech-info"><b>${esc(langName(m.lang))}</b><span class="sub">${esc(m.size_mb)} MB · ${esc(m.credit)}</span>
             ${m.state === "downloading" ? `<div class="bar"><i style="width:${m.percent}%"></i></div>` : ""}${m.error && m.state === "missing" ? `<span class="sub" style="color:var(--bad)">The last download failed. Check the internet connection and try again.</span>` : ""}</div>
-          <div class="row">${m.state === "ready" ? `<span class="pill ok">${ic("check")}Ready</span>${m.default ? "" : `<button class="btn sm ghost" data-act="speechdel" data-v="${esc(m.lang)}">${ic("trash")}Remove</button>`}`
-            : m.state === "downloading" ? `<span class="pill">Downloading ${esc(m.percent)}%</span>`
-            : `<button class="btn sm" data-act="speechget" data-v="${esc(m.lang)}">${ic("down")}Download</button>`}</div></div>`).join("")}</div></section>`;
+          <div class="row">${m.state === "ready" ? `<span class="pill ok">${ic("check")}${esc(t("ready", "Ready"))}</span>${m.default ? "" : `<button class="btn sm ghost" data-act="speechdel" data-v="${esc(m.lang)}">${ic("trash")}${esc(t("remove", "Remove"))}</button>`}`
+            : m.state === "downloading" ? `<span class="pill">${esc(t("downloading", "Downloading"))} ${esc(m.percent)}%</span>`
+            : `<button class="btn sm" data-act="speechget" data-v="${esc(m.lang)}">${ic("down")}${esc(t("download", "Download"))}</button>`}</div></div>`).join("")}</div></section>`;
       clearTimeout(S.speechTimer);
       if (r.models.some(m => m.state === "downloading")) S.speechTimer = setTimeout(() => { if (S.stab === "speech" && $("#sform")) drawSettings(); }, 1500);
       else if (S.speechTimer) { S.speechTimer = null; S.status = await api("/api/status"); }
+    }
+    if (tab === "language") {
+      const cur = currentLang();
+      body.innerHTML = `<section class="set-sec"><h2>${esc(t("app_language", "Language"))}</h2>
+        <p class="help">${esc(t("lang_help", "Select the display language for the ClipFlow user interface."))}</p>
+        <div class="fields narrow">
+          <label class="f">${esc(t("choose_language", "Interface Language"))}
+            <select id="ui_lang_select">
+              <option value="en" ${cur === "en" ? "selected" : ""}>English</option>
+              <option value="hi" ${cur === "hi" ? "selected" : ""}>हिन्दी (Hindi)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary" data-act="savelang">${esc(t("save", "Save"))}</button>
+        </div>
+      </section>`;
     }
     if (tab === "profile") {
       const joined = me.created_at ? new Date(me.created_at * 1000).toLocaleDateString([], {day: "numeric", month: "long", year: "numeric"}) : "";
@@ -2790,6 +2848,15 @@ document.addEventListener("click", async e => {
       b.disabled = false; return;
     }
     if (a === "tour") return startTour();
+    if (a === "savelang") {
+      const sel = $("#ui_lang_select");
+      if (sel) {
+        try { localStorage.setItem("clipflow_ui_lang", sel.value); } catch {}
+        toast(sel.value === "hi" ? "भाषा सहेज ली गई है" : "Language saved", "ok");
+        drawShell();
+        return drawSettings();
+      }
+    }
     if (a === "settab") { e.preventDefault(); S.stab = d.k; remember("settings", d.k); return drawSettings(); }
     if (a === "updhow") return updateHow();
     if (a === "updlater") { try { localStorage.setItem("clipflow_update_seen", S.status.update?.latest || ""); } catch {} return drawShell(); }

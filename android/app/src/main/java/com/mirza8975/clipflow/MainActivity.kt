@@ -59,7 +59,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var layoutError: View
     private lateinit var layoutLoading: View
     private lateinit var tvLoadingStatus: TextView
-    private lateinit var tvLoadingVersion: TextView
     private lateinit var fabSettings: FloatingActionButton
 
     // Server Config Views
@@ -70,8 +69,8 @@ class MainActivity : AppCompatActivity() {
 
     // Error Views
     private lateinit var tvErrorDetails: TextView
-    private lateinit var tvAppVersion: TextView
-    private lateinit var tvDiagnosticsLog: TextView
+    private var tvAppVersion: TextView? = null
+    private var tvDiagnosticsLog: TextView? = null
     private lateinit var btnCopyDiagnostics: Button
     private lateinit var btnRetry: Button
     private lateinit var btnChangeServer: Button
@@ -175,11 +174,7 @@ class MainActivity : AppCompatActivity() {
         layoutError = findViewById(R.id.layoutError)
         layoutLoading = findViewById(R.id.layoutLoading)
         tvLoadingStatus = findViewById(R.id.tvLoadingStatus)
-        tvLoadingVersion = layoutLoading.findViewById(R.id.tvLoadingVersion)
         fabSettings = findViewById(R.id.fabSettings)
-
-        // Show active version badge on loading screen
-        tvLoadingVersion.text = "ClipFlow v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
 
         // Server Config UI
         etServerUrl = layoutServerConfig.findViewById(R.id.etServerUrl)
@@ -195,7 +190,7 @@ class MainActivity : AppCompatActivity() {
         btnRetry = layoutError.findViewById(R.id.btnRetry)
         btnChangeServer = layoutError.findViewById(R.id.btnChangeServer)
 
-        tvAppVersion.text = "ClipFlow v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
+        tvAppVersion?.text = "ClipFlow v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
 
         btnCopyDiagnostics.setOnClickListener {
             val diag = ClipFlowBackendService.getDetailedDiagnostics(this)
@@ -246,12 +241,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         fabSettings.setOnClickListener {
-            showServerConfigScreen()
+            // Tapping Settings navigates the WebView to the real Settings page
+            webView.evaluateJavascript(
+                "(function() { " +
+                "  var b = document.querySelector('[data-act=\"go\"][data-v=\"settings\"]'); " +
+                "  if (b) { b.click(); } else if (window.S) { window.S.view = 'settings'; if (typeof draw === 'function') draw(); } " +
+                "})();",
+                null
+            )
         }
     }
 
     private fun startEngineAndConnect(targetUrl: String = "http://127.0.0.1:8765", isRestart: Boolean = false) {
-        showLoadingScreen(if (isRestart) "Restarting ClipFlow Studio Engine..." else "Starting ClipFlow Studio Engine...")
+        showLoadingScreen()
         if (!isRestart) {
             ClipFlowBackendService.startService(this)
         }
@@ -267,13 +269,13 @@ class MainActivity : AppCompatActivity() {
                 val serviceState = ClipFlowBackendService.currentState
                 when (serviceState) {
                     is ClipFlowBackendService.BackendState.Starting -> {
-                        tvLoadingStatus.text = serviceState.stage
+                        Log.i(TAG, "[BACKEND_STARTING_STAGE] ${serviceState.stage}")
                     }
                     is ClipFlowBackendService.BackendState.Error -> {
                         Log.e(TAG, "[FASTAPI_SERVER_FAILED] Backend reported failure: ${serviceState.message}")
                         hideLoadingScreen()
                         val details = serviceState.details?.let { "\n\n$it" } ?: ""
-                        showErrorScreen("ClipFlow Studio engine failed to start:\n${serviceState.message}$details")
+                        showErrorScreen("ClipFlow studio engine failed to start:\n${serviceState.message}$details")
                         return@launch
                     }
                     else -> {}
@@ -302,18 +304,23 @@ class MainActivity : AppCompatActivity() {
                 hideLoadingScreen()
                 val lastErr = ClipFlowBackendService.lastErrorMessage
                 val msg = if (lastErr != null) {
-                    "ClipFlow Studio engine failed to start within 45 seconds:\n\n$lastErr"
+                    "ClipFlow studio engine took too long to start.\n\n$lastErr"
                 } else {
-                    "Unable to reach the ClipFlow server.\nClipFlow Studio engine did not respond on 127.0.0.1:8765 within 45 seconds."
+                    "Unable to reach the ClipFlow studio engine.\nThe local engine did not respond on 127.0.0.1:8765 within 45 seconds."
                 }
                 showErrorScreen(msg)
             }
         }
     }
 
-    private fun showLoadingScreen(message: String) {
+    private fun showLoadingScreen(message: String = "") {
         layoutLoading.visibility = View.VISIBLE
-        tvLoadingStatus.text = message
+        val subtitle = layoutLoading.findViewById<TextView?>(R.id.tvLoadingSubtitle)
+        if (message.isNotEmpty() && subtitle != null) {
+            subtitle.text = message
+        } else if (subtitle != null) {
+            subtitle.setText(R.string.startup_loading)
+        }
         layoutServerConfig.visibility = View.GONE
         layoutError.visibility = View.GONE
         webView.visibility = View.GONE

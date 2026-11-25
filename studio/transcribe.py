@@ -60,6 +60,15 @@ def unload(lang: str) -> bool:
             if p.free.qsize() < p.made:
                 return False
             del _pools[lang]
+    try:
+        from . import tools
+        if tools.is_android():
+            from com.mirza8975.clipflow import SpeechEngine
+            target_lang = "hi" if lang in ("hi", "hi-IN") else lang
+            if SpeechEngine.getLoadedLanguage() == target_lang:
+                SpeechEngine.release(False)
+    except Exception:
+        pass
     return True
 
 # The machine with the graphics card, if there is one.
@@ -79,12 +88,35 @@ def model_ready(lang: str = fetch_model.DEFAULT) -> bool:
 
 
 def _model_files(d) -> dict:
-    """The model's three parts. A graphics card wants the full-precision files; processors the compact ones."""
+    """The model's component files. Supports both NeMo Transducers and Whisper models."""
     kinds = ("fp16", "", "int8") if PROVIDER != "cpu" else ("int8", "", "fp16")
+    # 1. First check for Transducer files (encoder, decoder, joiner)
     for k in kinds:
         names = {p: d / (f"{p}.{k}.onnx" if k else f"{p}.onnx") for p in ("encoder", "decoder", "joiner")}
         if all(f.is_file() for f in names.values()):
-            return {p: str(f) for p, f in names.items()}
+            tok = d / "tokens.txt"
+            tok_path = str(tok) if tok.is_file() else str(next(d.glob("*tokens*.txt"), tok))
+            res = {p: str(f) for p, f in names.items()}
+            res["tokens"] = tok_path
+            return res
+
+    # 2. Check for Whisper models (encoder and decoder, tokens, no joiner)
+    encs = list(d.glob("*encoder*.onnx"))
+    decs = list(d.glob("*decoder*.onnx"))
+    toks = list(d.glob("*tokens*.txt"))
+    if encs and decs and toks:
+        def pick(files):
+            for k in kinds:
+                for f in files:
+                    if k and k in f.name:
+                        return str(f)
+            return str(files[0])
+        return {
+            "encoder": pick(encs),
+            "decoder": pick(decs),
+            "tokens": str(toks[0]),
+        }
+
     raise FileNotFoundError(f"No speech model files in {d}")
 
 
@@ -163,22 +195,94 @@ def _load_sherpa():
                        "folder somewhere short, like C:\\peakcut, and start it again.") from first
 
 
+class _AndroidRecognizer:
+    """Native Android speech recognition bridge using sherpa-onnx AAR via Chaquopy."""
+    def __init__(self, lang: str):
+        from com.mirza8975.clipflow import SpeechEngine
+        self.engine = SpeechEngine
+        self.lang = lang
+        self._init_engine()
+
+    def _init_engine(self):
+        fetch_model.ensure(self.lang, start=self.lang == fetch_model.DEFAULT)
+        d = fetch_model.folder(self.lang)
+        files = _model_files(d)
+        tok = files.get("tokens") or str(d / "tokens.txt")
+        is_whisper = "joiner" not in files
+        enc = files["encoder"]
+        dec = files["decoder"]
+        joiner = files.get("joiner", "")
+        lang_code = "hi" if self.lang in ("hi", "hi-IN") else self.lang
+
+        ok = self.engine.initRecognizer(
+            str(d),
+            is_whisper,
+            enc,
+            dec,
+            joiner,
+            tok,
+            lang_code,
+            THREADS,
+        )
+        if not ok:
+            raise RuntimeError(f"Failed to initialize Android SpeechEngine for {self.lang}")
+
+    def decode_pieces(self, pieces: list) -> list:
+        results = []
+        for seg in pieces:
+            # Canonical format: 16,000 Hz, 1-channel, normalized Float32 little-endian bytes
+            float_arr = np.ascontiguousarray(seg, dtype=np.float32)
+            raw_bytes = float_arr.tobytes()
+            res = self.engine.transcribeFloatBytesDetailed(raw_bytes, 16000)
+            tokens = list(res.get("tokens") or [])
+            timestamps = [float(t) for t in (res.get("timestamps") or [])]
+            results.append((tokens, timestamps))
+        return results
+
+
 def _new(lang: str = fetch_model.DEFAULT):
+    from . import tools
+    if tools.is_android():
+        try:
+            return _AndroidRecognizer(lang)
+        except (ImportError, ModuleNotFoundError):
+            # Not running under Chaquopy runtime (e.g. desktop tests or Termux), fall through
+            pass
+
     sherpa_onnx = _sherpa()
     # English is downloaded here, once, if it was never fetched. Other languages are only ever downloaded when
     # someone asks for them; here we only wait for a download already running.
     fetch_model.ensure(lang, start=lang == fetch_model.DEFAULT)
     d = fetch_model.folder(lang)
-    return sherpa_onnx.OfflineRecognizer.from_transducer(
-        **_model_files(d),
-        tokens=str(d / "tokens.txt"),
-        num_threads=THREADS,
-        sample_rate=16000,
-        feature_dim=80,
-        decoding_method="greedy_search",
-        model_type="nemo_transducer",
-        provider=PROVIDER,
-    )
+    files = _model_files(d)
+    tok = files.get("tokens") or str(d / "tokens.txt")
+
+    if "joiner" in files:
+        # Transducer architecture (e.g. Parakeet TDT for English)
+        return sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=files["encoder"],
+            decoder=files["decoder"],
+            joiner=files["joiner"],
+            tokens=tok,
+            num_threads=THREADS,
+            sample_rate=16000,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            model_type="nemo_transducer",
+            provider=PROVIDER,
+        )
+    else:
+        # Whisper architecture (e.g. Whisper Tiny for Hindi)
+        lang_code = "hi" if lang in ("hi", "hi-IN") else lang
+        return sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=files["encoder"],
+            decoder=files["decoder"],
+            tokens=tok,
+            language=lang_code,
+            task="transcribe",
+            num_threads=THREADS,
+            provider=PROVIDER,
+        )
 
 
 def _take(lang: str = fetch_model.DEFAULT, wait: bool = True):
@@ -274,17 +378,19 @@ def _words(tokens, timestamps, a: int, b: int) -> list:
 
 def decode_pieces(pieces: list, rec=None, lang: str = fetch_model.DEFAULT) -> list:
     """[(tokens, timestamps), ...] for float32 pieces of audio, done on this machine with one copy of the model."""
-    streams = []
     rec = rec or _take(lang)       # held only for these pieces, so videos transcribing at once take turns fairly
     try:
+        if hasattr(rec, "decode_pieces"):
+            return rec.decode_pieces(pieces)
+        streams = []
         for seg in pieces:
             st = rec.create_stream()
             st.accept_waveform(16000, seg)
             streams.append(st)
         rec.decode_streams(streams)
+        return [(list(st.result.tokens), [float(t) for t in st.result.timestamps]) for st in streams]
     finally:
         _give_back(rec, lang)
-    return [(list(st.result.tokens), [float(t) for t in st.result.timestamps]) for st in streams]
 
 
 class RemoteLacks(Exception):

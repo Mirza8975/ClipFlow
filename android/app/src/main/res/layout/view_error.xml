@@ -10,29 +10,30 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:gravity="center"
-        android:padding="20dp">
+        android:padding="24dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:background="@drawable/card_background"
+            android:padding="24dp"
             android:gravity="center_horizontal">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="⚠️"
-                android:textSize="36sp" />
+                android:textSize="40sp" />
 
             <TextView
                 android:id="@+id/tvErrorTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/error_server_unreachable"
+                android:layout_marginTop="16dp"
+                android:text="@string/error_startup_title"
                 android:textColor="@color/text_primary"
-                android:textSize="18sp"
+                android:textSize="20sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -42,7 +43,8 @@
                 android:layout_marginTop="4dp"
                 android:textColor="@color/accent_blue"
                 android:textSize="12sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/tvErrorDetails"
@@ -50,87 +52,56 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:gravity="center" />
+                android:textSize="14sp"
+                android:gravity="center"
+                android:text="@string/error_startup_desc" />
 
-            <!-- Diagnostics and Logs Section -->
-            <LinearLayout
-                android:id="@+id/layoutDiagnostics"
+            <!-- Hidden raw diagnostics log container (accessible via Copy Diagnostics) -->
+            <TextView
+                android:id="@+id/tvDiagnosticsLog"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginTop="16dp"
-                android:background="@drawable/button_secondary">
-
-                <TextView
-                    android:id="@+id/tvDiagnosticsHeader"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/diagnostics_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:paddingBottom="6dp" />
-
-                <ScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="140dp"
-                    android:scrollbars="vertical"
-                    android:nestedScrollingEnabled="true">
-
-                    <TextView
-                        android:id="@+id/tvDiagnosticsLog"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
-                        android:textSize="10sp"
-                        android:textColor="@color/text_secondary"
-                        android:textIsSelectable="true" />
-                </ScrollView>
-
-                <Button
-                    android:id="@+id/btnCopyDiagnostics"
-                    android:layout_width="match_parent"
-                    android:layout_height="36dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/button_secondary"
-                    android:text="@string/btn_copy_diagnostics"
-                    android:textColor="@color/accent_blue"
-                    android:textAllCaps="false"
-                    android:textSize="12sp" />
-            </LinearLayout>
+                android:visibility="gone" />
 
             <!-- Action Buttons -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="20dp">
-
-                <Button
-                    android:id="@+id/btnChangeServer"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="6dp"
-                    android:background="@drawable/button_secondary"
-                    android:text="@string/btn_change_server"
-                    android:textColor="@color/text_primary"
-                    android:textAllCaps="false"
-                    android:textSize="13sp" />
+                android:orientation="vertical"
+                android:layout_marginTop="24dp">
 
                 <Button
                     android:id="@+id/btnRetry"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="6dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
                     android:background="@drawable/button_primary"
                     android:text="@string/btn_retry_startup"
                     android:textColor="@color/text_primary"
                     android:textAllCaps="false"
-                    android:textSize="13sp"
+                    android:textSize="15sp"
                     android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnCopyDiagnostics"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/button_secondary"
+                    android:text="@string/btn_copy_diagnostics"
+                    android:textColor="@color/accent_blue"
+                    android:textAllCaps="false"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/btnChangeServer"
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@android:color/transparent"
+                    android:text="@string/btn_change_server"
+                    android:textColor="@color/text_secondary"
+                    android:textAllCaps="false"
+                    android:textSize="13sp" />
             </LinearLayout>
 
         </LinearLayout>

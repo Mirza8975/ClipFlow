@@ -422,6 +422,11 @@ class ClipFlowBackendService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         shutdownServer()
+        try {
+            SpeechEngine.release(force = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing SpeechEngine on service destruction", e)
+        }
         executor.shutdown()
     }
 }

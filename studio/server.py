@@ -1555,7 +1555,7 @@ def ai_test(request: Request):
 def _speech_lang(lang: str) -> str:
     from . import fetch_model
     if not fetch_model.known(lang):
-        raise HTTPException(400, "PeakCut has no speech model for that language.")
+        raise HTTPException(400, "ClipFlow has no speech model for that language.")
     return lang
 
 
