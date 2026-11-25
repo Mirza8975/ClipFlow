@@ -383,7 +383,7 @@ class MainActivity : AppCompatActivity() {
         tvErrorDetails.text = details
 
         val diag = ClipFlowBackendService.getDetailedDiagnostics(this)
-        tvDiagnosticsLog.text = diag
+        tvDiagnosticsLog?.text = diag
     }
 
     private fun connectToServer(baseUrl: String) {

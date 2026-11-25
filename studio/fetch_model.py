@@ -138,12 +138,12 @@ def cancel(lang: str) -> None:
 
 def _download_url_with_resume(url: str, dest, st: dict, digest) -> tuple[bool, str, int]:
     """Download single URL with HTTP Range resumption. Returns (success, err_msg, total_size)."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
     got_bytes = dest.stat().st_size if dest.exists() else 0
     if got_bytes > 0:
-        headers["Range"] = f"bytes={got_bytes}-"
-
-    req = urllib.request.Request(url, headers=headers)
+        headers = {"User-Agent": USER_AGENT, "Accept": "*/*", "Range": f"bytes={got_bytes}-"}
+        req = urllib.request.Request(url, headers=headers)
+    else:
+        req = url
     try:
         with urllib.request.urlopen(req, timeout=WAIT) as r:
             status_code = getattr(r, "status", 200)
@@ -215,7 +215,7 @@ def _save(lang: str, dest) -> str:
             raise RuntimeError("Download cancelled by user")
         digest = hashlib.sha256()
         ok, err, _ = _download_url_with_resume(url, dest, st, digest)
-        if ok and dest.exists() and dest.stat().st_size > 1024:
+        if ok and dest.exists() and dest.stat().st_size > 0:
             return digest.hexdigest()
         last_err = err
         time.sleep(1)
@@ -246,7 +246,7 @@ def _fetch(lang: str):
     try:
         got_sha = _save(lang, tmp)
         if want and got_sha != want:
-            raise WrongFile(f"checksum mismatch: got {got_sha}, expected {want}")
+            raise WrongFile(f"its fingerprint (SHA-256) is {got_sha}, but ClipFlow expects {want}")
         shutil.rmtree(part, ignore_errors=True)
         part.mkdir(parents=True, exist_ok=True)
         with tarfile.open(tmp, "r:bz2") as t:
@@ -266,9 +266,13 @@ def _fetch(lang: str):
         st["percent"] = 100
         print(f"  {label(lang)} speech model ready.\n", flush=True)
     except WrongFile as e:
-        friendly = f"Downloaded {label(lang)} speech model was damaged or corrupted during transit. Please retry."
-        st["error"] = friendly
-        raise RuntimeError(friendly) from e
+        st["error"] = f"The downloaded file is not the expected one: {e}."
+        raise RuntimeError(
+            f"ClipFlow downloaded the {label(lang)} speech model, but the file is not the one it expects, "
+            "so it was not used: it may have been changed or damaged on the way. Nothing was unpacked. "
+            "Try again later. If a different download address was set (a mirror), it must hold the very "
+            f"same file. Details: {e}."
+        ) from e
     except Exception as e:
         err_str = str(e)
         if "cancelled" in err_str.lower():
