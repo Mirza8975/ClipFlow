@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import config
+from . import config, safe
 
 _SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
 
@@ -277,16 +277,14 @@ def _fetch(lang: str):
         err_str = str(e)
         if "cancelled" in err_str.lower():
             friendly = f"Download of {label(lang)} speech model was cancelled."
-        elif any(s in err_str for s in ("No address associated with hostname", "Name or service not known", "gaierror")):
-            friendly = f"Could not connect to model download servers for {label(lang)}. Please check your internet connection and DNS settings."
-        elif "timed out" in err_str.lower() or "timeout" in err_str.lower():
-            friendly = f"Connection timed out while downloading the {label(lang)} speech model. Please try again on a faster connection."
-        elif "storage space" in err_str.lower() or "no space left" in err_str.lower():
-            friendly = err_str
-        else:
-            friendly = f"ClipFlow could not download the {label(lang)} speech model (about {size} MB). Please check your internet connection and free disk space, then try again."
-        st["error"] = friendly
-        raise RuntimeError(friendly) from e
+            st["error"] = friendly
+            raise RuntimeError(friendly) from e
+        st["error"] = safe.friendly(e, 200)
+        raise RuntimeError(
+            f"ClipFlow couldn't download its {label(lang)} speech model (about {size} MB, needed once). "
+            "Check the internet connection and free disk space, then try again, or run "
+            f"python -m studio.fetch_model {lang} to see what goes wrong. What it reported: {st['error']}"
+        ) from e
     finally:
         st["doing"] = False
         tmp.unlink(missing_ok=True)
