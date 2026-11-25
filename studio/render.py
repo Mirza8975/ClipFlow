@@ -93,9 +93,20 @@ def install_fonts():
 LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)",
            "left": "Fill the screen, keep the left side", "right": "Fill the screen, keep the right side",
            "fit": "Full frame on black", "split": "Split screen: left half on top, right half below (two people)",
-           "gameplay": "Gameplay fills the screen, facecam in the corner"}
+           "gameplay": "Gameplay fills the screen, facecam in the corner",
+           "pip": "Picture-in-picture with facecam"}
 SAFE_MARGINS = {"reels": "Instagram Reels (9:16 safe)", "tiktok": "TikTok (9:16 safe)", "shorts": "YouTube Shorts", "none": "Full Frame (No Margin)"}
-_FILLS = ("crop", "left", "right", "gameplay")      # layouts where the picture covers the whole frame
+FILTERS = {
+    "normal": "",
+    "vivid": "eq=contrast=1.18:saturation=1.35",
+    "dramatic": "eq=contrast=1.35:saturation=0.88",
+    "vintage": "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
+    "bw": "hue=s=0",
+    "cyber": "eq=contrast=1.25:saturation=1.45,hue=h=15",
+    "warm": "colorbalance=rs=.12:gs=.06:bs=-.1",
+    "cool": "colorbalance=rs=-.1:gs=.0:bs=.15",
+}
+_FILLS = ("crop", "left", "right", "gameplay", "pip")      # layouts where the picture covers the whole frame
 
 
 def _ts(t):
@@ -188,7 +199,7 @@ def _hook_events(hook, dur, y):
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y) -> str:
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, text_overlays=None, stickers=None) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -257,6 +268,71 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if g_end - b >= 0.02:                                                     # said
                 ev.append(f"Dialogue: 1,{_ts(b)},{_ts(g_end)},Cap,,0,0,0,,{{{pos}\\c&H{base}&\\fscx{p - 5}\\fscy{p - 5}"
                           f"\\t(0,90,\\fscx100\\fscy100)}}{t}")
+
+    def _parse_coord(val, total):
+        if val is None:
+            return total // 2
+        if isinstance(val, str) and val.endswith("%"):
+            try:
+                return int(round(total * float(val[:-1]) / 100.0))
+            except (ValueError, TypeError):
+                return total // 2
+        try:
+            v = float(val)
+        except (ValueError, TypeError):
+            return total // 2
+        if 0 <= v <= 100:
+            return int(round(total * v / 100.0))
+        return int(max(0, min(total, round(v))))
+
+    # Custom text layers
+    for item in (text_overlays or []):
+        t_text = _clean(item.get("text", ""))
+        if not t_text:
+            continue
+        t_s = max(0.0, float(item.get("start", 0.0)))
+        t_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
+        if t_e <= t_s:
+            t_e = dur
+        t_x = _parse_coord(item.get("x"), W)
+        t_y = _parse_coord(item.get("y"), H)
+        raw_fs = item.get("font_size") if item.get("font_size") is not None else item.get("size", 72)
+        try:
+            fs_val = float(raw_fs)
+        except (ValueError, TypeError):
+            fs_val = 72.0
+        if fs_val <= 64:
+            t_fs = max(24, int(round(fs_val * 2.5)))
+        else:
+            t_fs = max(24, int(round(fs_val)))
+        t_col = str(item.get("color", "FFFFFF")).lstrip("#")
+        if len(t_col) == 3:
+            t_col = "".join(c * 2 for c in t_col)
+        ass_col = f"{t_col[4:6]}{t_col[2:4]}{t_col[0:2]}".upper() if len(t_col) == 6 else "FFFFFF"
+        rot = int(item.get("rotation", 0))
+        rot_tag = f"\\frz{rot}" if rot else ""
+        ev.append(f"Dialogue: 5,{_ts(t_s)},{_ts(t_e)},Cap,,0,0,0,,{{\\an5\\pos({t_x},{t_y})\\fs{t_fs}\\c&H{ass_col}&{rot_tag}\\bord3\\3c&H000000&}}{t_text}")
+
+    # Stickers / Emojis
+    for item in (stickers or []):
+        s_emoji = _clean(str(item.get("emoji") or item.get("text") or ""))
+        if not s_emoji:
+            continue
+        s_s = max(0.0, float(item.get("start", 0.0)))
+        s_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
+        if s_e <= s_s:
+            s_e = dur
+        s_x = _parse_coord(item.get("x"), W)
+        s_y = _parse_coord(item.get("y"), H)
+        scale = float(item.get("scale", 1.0))
+        if item.get("size"):
+            s_fs = max(32, int(item.get("size")))
+        else:
+            s_fs = max(32, int(round(96 * scale)))
+        rot = int(item.get("rotation", 0))
+        rot_tag = f"\\frz{rot}" if rot else ""
+        ev.append(f"Dialogue: 6,{_ts(s_s)},{_ts(s_e)},Cap,,0,0,0,,{{\\an5\\pos({s_x},{s_y})\\fs{s_fs}{rot_tag}}}{s_emoji}")
+
     return head + "\n".join(ev) + "\n"
 
 
@@ -264,41 +340,99 @@ PIP_W = 380            # how wide the facecam is in the 1080-wide frame
 PIP_MARGIN = 26
 
 
-def _filter(layout, fg_h, facecam=None):
-    if layout == "gameplay" and facecam:
-        # The game fills the screen, and the webcam sits in the top corner of it, so a viewer sees
-        # the play and the face at the same time.
-        fx, fy, fw, fh = (int(v) for v in facecam)
+def _normalize_facecam(facecam, src_w: int, src_h: int):
+    """Converts percentage or pixel facecam coordinates to valid source-pixel crop parameters."""
+    if not facecam or not isinstance(facecam, (list, tuple)) or len(facecam) < 4:
+        return None
+    try:
+        raw_fx, raw_fy, raw_fw, raw_fh = (float(facecam[i]) for i in range(4))
+    except (ValueError, TypeError):
+        return None
+
+    if raw_fw <= 100 and raw_fh <= 100:
+        fx = int(round(src_w * raw_fx / 100.0))
+        fy = int(round(src_h * raw_fy / 100.0))
+        fw = int(round(src_w * raw_fw / 100.0))
+        fh = int(round(src_h * raw_fh / 100.0))
+    else:
+        fx = int(round(raw_fx))
+        fy = int(round(raw_fy))
+        fw = int(round(raw_fw))
+        fh = int(round(raw_fh))
+
+    fw = max(16, min(src_w, fw))
+    fh = max(16, min(src_h, fh))
+    fw = fw - (fw % 2)
+    fh = fh - (fh % 2)
+
+    fx = max(0, min(src_w - fw, fx))
+    fy = max(0, min(src_h - fh, fy))
+
+    ox = 0
+    oy = 0
+    if len(facecam) >= 6:
+        try:
+            raw_ox = float(facecam[4])
+            raw_oy = float(facecam[5])
+            if 0 < raw_ox <= 100:
+                ox = int(round(W * raw_ox / 100.0))
+            else:
+                ox = int(round(raw_ox))
+            if 0 < raw_oy <= 100:
+                oy = int(round(H * raw_oy / 100.0))
+            else:
+                oy = int(round(raw_oy))
+        except (ValueError, TypeError):
+            ox, oy = 0, 0
+
+    return [fx, fy, fw, fh, ox, oy]
+
+
+def _filter(layout, fg_h, facecam=None, video_filter=None):
+    vf = FILTERS.get(str(video_filter or "").lower(), "")
+    if layout in ("gameplay", "pip") and facecam:
+        fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
         if fw > 8 and fh > 8:
             pip_h = max(2, int(round(PIP_W * fh / fw)))
-            return (f"[0:v]fps={config.OUT_FPS},split=2[base][fc];"
-                    f"[base]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[b];"
-                    f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={PIP_W}:{pip_h},setsar=1[p];"
-                    f"[b][p]overlay={W - PIP_W - PIP_MARGIN}:{PIP_MARGIN}[v0];")
+            ox = int(facecam[4]) if len(facecam) >= 6 and int(facecam[4]) > 0 else (W - PIP_W - PIP_MARGIN)
+            oy = int(facecam[5]) if len(facecam) >= 6 and int(facecam[5]) > 0 else PIP_MARGIN
+            base_chain = (f"[0:v]fps={config.OUT_FPS},split=2[base][fc];"
+                          f"[base]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[b];"
+                          f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={PIP_W}:{pip_h},setsar=1[p];"
+                          f"[b][p]overlay={ox}:{oy}[v_raw];")
+            return base_chain + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
     fill = f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
-    if layout == "crop" or (layout == "gameplay" and not facecam):
-        return fill + ",setsar=1[v0];"
-    if layout == "left":
-        return fill + ":0:0,setsar=1[v0];"
-    if layout == "right":
-        return fill + ":in_w-out_w:0,setsar=1[v0];"
-    if layout == "fit":
-        return f"[0:v]fps={config.OUT_FPS},scale={W}:{fg_h},pad={W}:{H}:0:(oh-ih)/2:black,setsar=1[v0];"
-    if layout == "split":
+    if layout == "crop" or (layout in ("gameplay", "pip") and not facecam):
+        core = fill + ",setsar=1[v_raw];"
+    elif layout == "left":
+        core = fill + ":0:0,setsar=1[v_raw];"
+    elif layout == "right":
+        core = fill + ":in_w-out_w:0,setsar=1[v_raw];"
+    elif layout == "fit":
+        core = f"[0:v]fps={config.OUT_FPS},scale={W}:{fg_h},pad={W}:{H}:0:(oh-ih)/2:black,setsar=1[v_raw];"
+    elif layout == "split":
         half = f"scale={W}:{H // 2}:force_original_aspect_ratio=increase,crop={W}:{H // 2}"
-        return (f"[0:v]fps={config.OUT_FPS},split=2[l][r];[l]crop=iw/2:ih:0:0,{half}[t];"
-                f"[r]crop=iw/2:ih:iw/2:0,{half}[u];[t][u]vstack,setsar=1[v0];")
-    return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
-            f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
-            f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
-            f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
-            f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v0];")
+        if facecam and len(facecam) >= 4 and int(facecam[2]) > 8 and int(facecam[3]) > 8:
+            fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
+            core = (f"[0:v]fps={config.OUT_FPS},split=2[fc][main];"
+                    f"[fc]crop={fw}:{fh}:{fx}:{fy},{half}[t];"
+                    f"[main]{half}[u];[t][u]vstack,setsar=1[v_raw];")
+        else:
+            core = (f"[0:v]fps={config.OUT_FPS},split=2[l][r];[l]crop=iw/2:ih:0:0,{half}[t];"
+                    f"[r]crop=iw/2:ih:iw/2:0,{half}[u];[t][u]vstack,setsar=1[v_raw];")
+    else:
+        core = (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
+                f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
+                f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
+                f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
+                f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v_raw];")
+    return core + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
 
 
 def _hook_y(layout, hook_y, facecam=None):
     """Where the heading goes. In the gameplay layout the webcam sits in the top corner, so a heading
     across the top would run under it: it goes just below the picture instead."""
-    if layout == "gameplay" and facecam and len(facecam) == 4 and facecam[2] > 8:
+    if layout in ("gameplay", "pip") and facecam and len(facecam) >= 4 and facecam[2] > 8:
         return PIP_MARGIN + int(round(PIP_W * facecam[3] / facecam[2])) + 32
     return hook_y
 
@@ -312,30 +446,45 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), clip.get("safe_margin"))
-    face = clip.get("facecam")
-    if layout == "gameplay" and not (face and len(face) == 4):
+    face = _normalize_facecam(clip.get("facecam"), src_w, src_h)
+    if layout in ("gameplay", "pip") and not (face and len(face) >= 4):
         layout = "crop"     # no webcam found: the game fills the screen, which is still the right shape
     hook_y = _hook_y(layout, hook_y, face)
+    text_overlays = clip.get("text_overlays") or []
+    stickers = clip.get("stickers") or []
+    v_filter = clip.get("filter")
+    vol = float(clip.get("volume", 1.0))
+    muted = bool(clip.get("muted", False))
     ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y)
+                    clip.get("highlight_words", []), hook_y, cap_y, text_overlays=text_overlays, stickers=stickers)
     # The clip is made in a short work folder and moved into place afterwards.
     work = Path(tempfile.mkdtemp(prefix="cf"))
     try:
         meta = {"title": clip.get("title") or "", "description": clip.get("description") or "", "comment": clip.get("description") or ""}
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, meta=meta)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, meta=meta,
+                          video_filter=v_filter, volume=vol, muted=muted)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, meta=None) -> dict:
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, meta=None,
+               video_filter=None, volume=1.0, muted=False) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h, face) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    fc = _filter(layout, fg_h, face, video_filter=video_filter) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    af_filters = []
+    if muted or volume <= 0.001:
+        af_filters.append("volume=0")
+    elif abs(volume - 1.0) > 0.01:
+        af_filters.append(f"volume={volume:.2f}")
+    af_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
+    af_chain = ",".join(af_filters)
+
     base = [_tools.get_ffmpeg(), "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", af_chain,
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
     for k, v in (meta or {}).items():
         if v:

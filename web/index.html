@@ -1075,6 +1075,131 @@ dialog[open]{animation:fadein .16s ease}
     gap: 24px;
   }
 }
+
+/* ============================================================ VN / CapCut Style Video Editor & Visual Features */
+dialog#clipdlg {
+  border: 0; padding: 0; background: #0b0e14; color: #f1f5f9; border-radius: 16px;
+  overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.85); max-width: 95vw; width: 960px; max-height: 94vh; height: 94vh;
+}
+dialog#clipdlg::backdrop { background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); }
+@media (max-width: 900px) {
+  dialog#clipdlg[open] {
+    position: fixed; inset: auto 0 0 0; width: 100vw; max-width: 100vw; margin: 0;
+    border-radius: 20px 20px 0 0; height: 95vh; height: 95dvh; max-height: 95vh; max-height: 95dvh;
+  }
+}
+.cf-editor { display: flex; flex-direction: column; height: 100%; width: 100%; background: #0b0e14; overflow: hidden; user-select: none; }
+.cf-ed-top { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 14px; background: #131722; border-bottom: 1px solid rgba(255,255,255,0.08); flex: none; gap: 10px; }
+.cf-ed-top-left, .cf-ed-top-right { display: flex; align-items: center; gap: 8px; }
+.cf-ed-title { font-weight: 600; font-size: 14px; color: #e2e8f0; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.cf-ed-btn { background: rgba(255,255,255,0.08); border: 0; color: #cbd5e1; border-radius: 8px; padding: 6px 11px; font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease; }
+.cf-ed-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+.cf-ed-btn.primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-weight: 600; }
+.cf-ed-btn.primary:hover { filter: brightness(1.1); box-shadow: 0 2px 10px rgba(99,102,241,0.4); }
+.cf-ed-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.cf-ed-stage-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #07090d; position: relative; overflow: hidden; padding: 8px; }
+.cf-ed-stage-viewport { position: relative; display: flex; align-items: center; justify-content: center; max-height: 100%; max-width: 100%; box-shadow: 0 8px 30px rgba(0,0,0,0.7); border-radius: 10px; overflow: hidden; background: #000; }
+.cf-ed-stage-viewport.ratio-9-16 { aspect-ratio: 9/16; }
+.cf-ed-stage-viewport.ratio-16-9 { aspect-ratio: 16/9; }
+.cf-ed-stage-viewport.ratio-1-1 { aspect-ratio: 1/1; }
+.cf-ed-video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cf-ed-overlay-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+
+.cf-live-caption-box { position: absolute; left: 6%; right: 6%; bottom: 22%; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; transition: bottom .2s ease; z-index: 10; }
+.cf-caption-line { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 6px; line-height: 1.25; }
+.cf-cap-word { font-family: inherit; font-weight: 800; transition: all .08s ease; text-shadow: 0 2px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5); }
+
+.cf-style-bounce .cf-cap-word { font-family: 'Poppins', sans-serif; font-size: 20px; color: #fff; text-transform: uppercase; }
+.cf-style-bounce .cf-cap-word.active { color: #00f0ff; transform: scale(1.18); text-shadow: 0 0 14px rgba(0,240,255,0.7); }
+.cf-style-hype .cf-cap-word { font-family: 'Impact', 'Anton', sans-serif; font-size: 24px; color: #fff; letter-spacing: 0.5px; text-transform: uppercase; }
+.cf-style-hype .cf-cap-word.active { color: #ff3c3c; transform: scale(1.22); text-shadow: 0 0 16px rgba(255,60,60,0.8); }
+.cf-style-clean .cf-cap-word { font-family: 'Poppins', sans-serif; font-size: 18px; color: #fff; font-weight: 700; }
+.cf-style-clean .cf-cap-word.active { color: #6bd7ff; border-bottom: 2px solid #6bd7ff; }
+.cf-style-neon .cf-cap-word { font-family: 'Arial Black', sans-serif; font-size: 21px; color: #fff; text-transform: uppercase; }
+.cf-style-neon .cf-cap-word.active { color: #00ff66; text-shadow: 0 0 12px #00ff66, 0 0 24px #00ff66; }
+.cf-style-minimal .cf-cap-word { font-family: 'Poppins', sans-serif; font-size: 16px; color: #f5f5f5; font-weight: 600; }
+.cf-style-minimal .cf-cap-word.active { color: #ffd700; font-weight: 800; }
+
+.cf-ed-frame-box { position: absolute; border: 2px dashed #00f0ff; background: rgba(0, 240, 255, 0.15); box-shadow: 0 0 12px rgba(0, 240, 255, 0.35); pointer-events: auto; cursor: move; z-index: 15; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); touch-action: none; }
+.cf-ed-frame-handle { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid #00f0ff; border-radius: 50%; pointer-events: auto; }
+.cf-ed-frame-handle.br { right: -7px; bottom: -7px; cursor: se-resize; }
+.cf-ed-frame-handle.tl { left: -7px; top: -7px; cursor: nw-resize; }
+
+.cf-stage-text-item { position: absolute; pointer-events: auto; cursor: move; z-index: 12; white-space: nowrap; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.8); border: 1px dashed transparent; padding: 4px 6px; border-radius: 4px; touch-action: none; }
+.cf-stage-text-item.selected { border-color: #6366f1; background: rgba(99,102,241,0.2); }
+.cf-stage-sticker-item { position: absolute; pointer-events: auto; cursor: move; z-index: 12; border: 1px dashed transparent; border-radius: 8px; touch-action: none; }
+.cf-stage-sticker-item.selected { border-color: #f59e0b; background: rgba(245,158,11,0.2); }
+
+.cf-ed-playbar { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 14px; background: #11141c; border-top: 1px solid rgba(255,255,255,0.06); flex: none; }
+.cf-ed-play-btn { background: transparent; border: 0; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; }
+.cf-ed-time-txt { font-size: 11px; font-family: monospace; color: #94a3b8; min-width: 90px; }
+.cf-ed-seek-slider { flex: 1; accent-color: #6366f1; height: 4px; cursor: pointer; }
+
+.cf-ed-timeline-wrap { background: #0f121a; border-top: 1px solid rgba(255,255,255,0.08); border-bottom: 1px solid rgba(255,255,255,0.08); padding: 6px 12px; flex: none; max-height: 140px; overflow-x: auto; overflow-y: hidden; position: relative; display: flex; flex-direction: column; gap: 5px; }
+.cf-tl-ruler { height: 16px; display: flex; justify-content: space-between; font-size: 9px; font-family: monospace; color: #64748b; padding: 0 4px; }
+.cf-tl-track { height: 24px; background: rgba(255,255,255,0.04); border-radius: 6px; position: relative; display: flex; align-items: center; padding: 0 6px; font-size: 10px; font-weight: 600; color: #94a3b8; overflow: hidden; }
+.cf-tl-track.video-track { height: 32px; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3); }
+.cf-tl-range-bar { position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(99,102,241,0.4), rgba(139,92,246,0.4)); border-top: 2px solid #6366f1; border-bottom: 2px solid #6366f1; display: flex; align-items: center; justify-content: space-between; }
+.cf-trim-handle { width: 14px; height: 100%; background: #6366f1; cursor: ew-resize; display: flex; align-items: center; justify-content: center; touch-action: none; z-index: 5; }
+.cf-trim-handle::after { content: ""; width: 3px; height: 14px; background: #fff; border-radius: 2px; }
+.cf-trim-handle.start { border-radius: 4px 0 0 4px; }
+.cf-trim-handle.end { border-radius: 0 4px 4px 0; }
+.cf-tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ef4444; z-index: 20; pointer-events: none; }
+.cf-tl-playhead::after { content: ""; position: absolute; top: 0; left: -4px; width: 10px; height: 8px; background: #ef4444; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+
+.cf-ed-bottom-panel { flex: 0 0 210px; max-height: 230px; background: #131622; display: flex; flex-direction: column; overflow: hidden; }
+@media (max-width: 900px) { .cf-ed-bottom-panel { flex: 0 0 220px; max-height: 240px; } }
+.cf-ed-tabs-bar { display: flex; overflow-x: auto; border-bottom: 1px solid rgba(255,255,255,0.08); background: #0e111a; flex: none; scrollbar-width: none; }
+.cf-ed-tabs-bar::-webkit-scrollbar { display: none; }
+.cf-ed-tab-btn { display: flex; align-items: center; gap: 5px; padding: 9px 13px; font-size: 12px; font-weight: 500; color: #94a3b8; background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.cf-ed-tab-btn.active { color: #fff; font-weight: 600; border-bottom-color: #6366f1; }
+.cf-ed-tab-content { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+
+.cf-styles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.cf-style-card { background: #1a1e2b; border: 1.5px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; align-items: center; text-align: center; transition: all .15s ease; }
+.cf-style-card:hover { border-color: rgba(99,102,241,0.5); }
+.cf-style-card.active { border-color: #6366f1; background: rgba(99,102,241,0.12); box-shadow: 0 0 12px rgba(99,102,241,0.3); }
+.cf-style-card-preview { font-size: 14px; font-weight: 800; padding: 6px 10px; background: #0a0d14; border-radius: 6px; width: 100%; }
+.cf-style-card-name { font-size: 12px; font-weight: 600; color: #cbd5e1; }
+
+.cf-layouts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(115px, 1fr)); gap: 10px; }
+.cf-layout-card { background: #1a1e2b; border: 1.5px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all .15s ease; font-size: 11px; font-weight: 500; }
+.cf-layout-card.active { border-color: #6366f1; background: rgba(99,102,241,0.12); }
+.cf-layout-icon-box { width: 44px; height: 58px; background: #0b0e15; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+
+.cf-filters-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(85px, 1fr)); gap: 8px; }
+.cf-filter-card { background: #1a1e2b; border: 1.5px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; }
+.cf-filter-card.active { border-color: #6366f1; background: rgba(99,102,241,0.15); }
+.cf-filter-thumb { width: 44px; height: 44px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #ec4899); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+
+.cf-stickers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 8px; }
+.cf-sticker-btn { font-size: 24px; background: #1a1e2b; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform .1s ease; }
+.cf-sticker-btn:hover { transform: scale(1.15); }
+
+dialog#createdlg { border: 0; padding: 0; background: #12151f; color: #f1f5f9; border-radius: 20px 20px 0 0; box-shadow: 0 -10px 40px rgba(0,0,0,0.8); width: 100vw; max-width: 560px; margin: auto auto 0 auto; }
+dialog#createdlg::backdrop { background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
+.cf-create-sheet { padding: 20px 20px 30px; display: flex; flex-direction: column; gap: 16px; }
+.cf-create-title { font-size: 18px; font-weight: 700; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+.cf-create-opt-list { display: flex; flex-direction: column; gap: 10px; }
+.cf-create-opt-item { display: flex; align-items: center; gap: 14px; padding: 12px 14px; background: #1a1e2b; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; cursor: pointer; transition: all .15s ease; text-align: left; width: 100%; border: 0; }
+.cf-create-opt-item:hover { background: #232838; }
+.cf-create-opt-icon { width: 40px; height: 40px; border-radius: 10px; background: rgba(99,102,241,0.15); color: #818cf8; display: flex; align-items: center; justify-content: center; font-size: 20px; flex: none; }
+.cf-create-opt-text h4 { margin: 0; font-size: 14px; font-weight: 600; color: #f8fafc; }
+.cf-create-opt-text p { margin: 2px 0 0; font-size: 12px; color: #94a3b8; }
+
+.clip-detection-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; margin-bottom: 4px; }
+.clip-detection-badge.ai { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+.clip-detection-badge.offline { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+
+.cf-card-acts { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.cf-card-acts .btn { padding: 5px 9px; font-size: 12px; }
+.cf-more-menu { position: relative; display: inline-block; }
+.cf-more-dropdown { position: absolute; right: 0; bottom: 100%; background: #1e2230; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); z-index: 50; min-width: 150px; display: none; flex-direction: column; overflow: hidden; margin-bottom: 4px; }
+.cf-more-dropdown.open { display: flex; }
+.cf-more-dropdown button { background: transparent; border: 0; padding: 8px 12px; font-size: 12px; color: #cbd5e1; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.cf-more-dropdown button:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.cf-more-dropdown button.danger { color: #f87171; }
 </style>
 </head>
 <body>
@@ -1103,6 +1228,7 @@ dialog[open]{animation:fadein .16s ease}
 </nav>
 <dialog id="clipdlg"></dialog>
 <dialog id="formdlg"></dialog>
+<dialog id="createdlg"></dialog>
 <input type="file" id="file" accept="video/*" multiple hidden>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div class="pop" id="bellpop" role="dialog" aria-label="Notifications" hidden></div>
@@ -1199,7 +1325,15 @@ const I = {
  "signout": "<path d=\"M120,216a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V40a8,8,0,0,1,8-8h64a8,8,0,0,1,0,16H56V208h56A8,8,0,0,1,120,216Zm109.66-93.66-40-40a8,8,0,0,0-11.32,11.32L204.69,120H112a8,8,0,0,0,0,16h92.69l-26.35,26.34a8,8,0,0,0,11.32,11.32l40-40A8,8,0,0,0,229.66,122.34Z\"/>",
  "shield": "<path d=\"M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z\"/>",
  "users": "<path d=\"M117.25,157.92a60,60,0,1,0-66.5,0A95.83,95.83,0,0,0,3.53,195.63a8,8,0,1,0,13.4,8.74,80,80,0,0,1,134.14,0,8,8,0,0,0,13.4-8.74A95.83,95.83,0,0,0,117.25,157.92ZM40,108a44,44,0,1,1,44,44A44.05,44.05,0,0,1,40,108Zm210.14,98.7a8,8,0,0,1-11.07-2.33A79.83,79.83,0,0,0,172,168a8,8,0,0,1,0-16,44,44,0,1,0-16.34-84.87,8,8,0,1,1-5.94-14.85,60,60,0,0,1,55.53,105.64,95.83,95.83,0,0,1,47.22,37.71A8,8,0,0,1,250.14,206.7Z\"/>",
- "lock": "<path d=\"M128,112a28,28,0,0,0-8,54.83V184a8,8,0,0,0,16,0V166.83A28,28,0,0,0,128,112Zm0,40a12,12,0,1,1,12-12A12,12,0,0,1,128,152Zm80-72H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z\"/>"
+ "lock": "<path d=\"M128,112a28,28,0,0,0-8,54.83V184a8,8,0,0,0,16,0V166.83A28,28,0,0,0,128,112Zm0,40a12,12,0,1,1,12-12A12,12,0,0,1,128,152Zm80-72H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z\"/>",
+ "audio": "<path d=\"M155.51,24.81a8,8,0,0,0-8.42.88L77.25,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H77.25l69.84,54.31A8,8,0,0,0,160,224V32A8,8,0,0,0,155.51,24.81ZM144,207.64,82.14,159.53A8,8,0,0,0,77.25,160H32V96H77.25a8,8,0,0,0,4.89-.47L144,48.36ZM213.66,82.34a8,8,0,0,0-11.32,11.32A47.95,47.95,0,0,1,216,128a47.95,47.95,0,0,1-13.66,34.34,8,8,0,0,0,11.32,11.32A63.93,63.93,0,0,0,232,128,63.93,63.93,0,0,0,213.66,82.34Z\"/>",
+ "undo": "<path d=\"M224,128A96,96,0,0,1,60.12,195.88a8,8,0,0,1,11.32-11.32A80,80,0,1,0,71.43,71.43L99.31,99.31A8,8,0,0,1,93.66,113H32a8,8,0,0,1-8-8V42.34a8,8,0,0,1,13.66-5.65l22.62,22.62A96,96,0,0,1,224,128Z\"/>",
+ "redo": "<path d=\"M232,105a8,8,0,0,1-8,8H162.34a8,8,0,0,1-5.65-13.66l27.88-27.88A80,80,0,1,0,184.57,184.57a8,8,0,0,1,11.32,11.32A96,96,0,1,1,195.88,60.12l22.62-22.62A8,8,0,0,1,232,42.34Z\"/>",
+ "share": "<path d=\"M216,152a32,32,0,0,0-26.47,14L105.77,121.7a32.06,32.06,0,0,0,0-19.4L189.53,58A32,32,0,1,0,184,40a31.7,31.7,0,0,0,1.23,8.7L101.47,93A32,32,0,1,0,96,160a31.7,31.7,0,0,0,5.47-.48L185.23,207.3A32,32,0,1,0,216,152ZM216,40a16,16,0,1,1-16,16A16,16,0,0,1,216,40ZM64,144a16,16,0,1,1,16-16A16,16,0,0,1,64,144Zm152,72a16,16,0,1,1,16-16A16,16,0,0,1,216,216Z\"/>",
+ "dots": "<path d=\"M128,96a24,24,0,1,0,24,24A24,24,0,0,0,128,96Zm0,32a8,8,0,1,1,8-8A8,8,0,0,1,128,128Zm0-80a24,24,0,1,0-24-24A24,24,0,0,0,128,48Zm0-32a8,8,0,1,1-8,8A8,8,0,0,1,128,16Zm0,192a24,24,0,1,0,24,24A24,24,0,0,0,128,208Zm0,32a8,8,0,1,1,8-8A8,8,0,0,1,128,240Z\"/>",
+ "text": "<path d=\"M208,56H48a8,8,0,0,0,0,16h72v128a8,8,0,0,0,16,0V72h72a8,8,0,0,0,0-16Z\"/>",
+ "sticker": "<path d=\"M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216ZM92,108a12,12,0,1,1,12-12A12,12,0,0,1,92,108Zm72,0a12,12,0,1,1,12-12A12,12,0,0,1,164,108Zm-87.64,48a8,8,0,0,1,11.28-1.55,64,64,0,0,0,80.72,0,8,8,0,1,1,9.72,12.7,80,80,0,0,1-100.17,0A8,8,0,0,1,76.36,156Z\"/>",
+ "sparkle": "<path d=\"M208,128a8,8,0,0,1-8,8,80.09,80.09,0,0,0-72,72,8,8,0,0,1-16,0,80.09,80.09,0,0,0-72-72,8,8,0,0,1,0-16,80.09,80.09,0,0,0,72-72,8,8,0,0,1,16,0,80.09,80.09,0,0,0,72,72A8,8,0,0,1,208,128Z\"/>"
 };
 const ic = n => `<svg viewBox="0 0 256 256" aria-hidden="true">${I[n]}</svg>`;
 const navIc = (n, v) => ic(S.view === v && I[n + "_f"] ? n + "_f" : n);
@@ -1472,7 +1606,10 @@ function openAcct() {
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
-document.addEventListener("click", e => { if (!e.target.closest(".pop, [data-act=bell], [data-act=acctmenu]")) closePops(); });
+document.addEventListener("click", e => {
+  if (!e.target.closest(".pop, [data-act=bell], [data-act=acctmenu]")) closePops();
+  if (!e.target.closest(".cf-more-menu")) $$(".cf-more-dropdown.open").forEach(dd => dd.classList.remove("open"));
+});
 document.addEventListener("keydown", e => { if (e.key === "Escape") closePops(); });
 /* new notifications pop up as a small card with a soft chime */
 let lastNotice = Number(localStorage.getItem("lastNotice") || 0), chimeCtx = null;
@@ -2030,18 +2167,36 @@ function clipHtml(j, c) {
     : c.status === "error" ? `<span class="making" style="animation:none;color:var(--bad);background:var(--bad-soft)">Could not make this clip. Open it to try again.</span>`
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   const key = `c:${j.id}:${c.id}`, busyClip = c.status === "queued" || c.status === "rendering";
+  const isAi = c.ai_detected === true || (c.score && c.score >= 70 && !c.reason?.includes("loudness"));
+  const detBadge = isAi
+    ? `<span class="clip-detection-badge ai">${ic("bolt")}AI Generated</span>`
+    : `<span class="clip-detection-badge offline" title="${esc(c.reason || 'Offline acoustic analysis')}">${ic("audio")}Speech & Loudness</span>`;
+
   return `<article class="clip ${sel().has(key) ? "picked" : ""}">
     <button class="shot" data-act="openclip" ${a} aria-label="Open clip: ${esc(c.title || c.hook)}">${body}
       <span class="badge l ${scoreCls(c.score)}" title="AI score">${c.score || "Hand"}</span><span class="badge r">${fmt(c.end - c.start)}</span></button>
     <div class="clip-body">
+      ${detBadge}
       <div class="hook">${esc(c.hook || "Untitled clip")}</div>
       <div class="ttl">${esc(c.title)}</div>
       ${postPills(c) ? `<div class="row" style="gap:4px">${postPills(c)}</div>` : ""}
-      <div class="clip-foot">
-        ${busyClip ? "" : `<label class="selck" title="Select this clip"><input type="checkbox" data-sel="${key}" ${sel().has(key) ? "checked" : ""} aria-label="Select this clip"></label>`}
-        ${c.status === "done" ? `<a class="btn sm icon ghost" href="${m}${esc(c.file)}?download=1" title="Download" aria-label="Download">${ic("down")}</a>` : ""}
-        <button class="btn sm icon ghost" data-act="copy" ${a} title="Copy post text" aria-label="Copy post text">${ic("copy")}</button>
-        ${busyClip ? "" : `<button class="btn sm icon ghost" data-act="delclip" ${a} title="Delete this clip" aria-label="Delete this clip">${ic("trash")}</button>`}
+      <div class="cf-card-acts">
+        <button class="btn sm" data-act="playclip" ${a}>${ic("play")}Play</button>
+        <button class="btn sm primary" data-act="openclip" ${a}>${ic("scissors")}Edit</button>
+        ${c.status === "done" ? `<button class="btn sm icon ghost" data-act="shareclip" ${a} title="Share clip">${ic("share")}</button>` : ""}
+        <span class="grow"></span>
+        <div class="cf-more-menu">
+          <button class="btn sm icon ghost" data-act="togglemore" title="More options" aria-label="More options">${ic("dots")}</button>
+          <div class="cf-more-dropdown">
+            ${c.status === "done" ? `<a href="${m}${esc(c.file)}?download=1" download="${esc(c.title || 'clip')}.mp4" class="btn" style="text-decoration:none">${ic("down")}Save to Downloads</a>` : ""}
+            <button data-act="renameclip" ${a}>${ic("cog")}Rename Clip</button>
+            <button data-act="copy" ${a}>${ic("copy")}Copy Post Text</button>
+            ${busyClip ? "" : `<button class="danger" data-act="delclip" ${a}>${ic("trash")}Delete Clip</button>`}
+          </div>
+        </div>
+      </div>
+      <div class="clip-foot" style="margin-top:6px;border-top:0">
+        ${busyClip ? "" : `<label class="selck" title="Select this clip"><input type="checkbox" data-sel="${key}" ${sel().has(key) ? "checked" : ""} aria-label="Select this clip"> Select</label>`}
         <span class="grow"></span>
         ${c.status === "done" ? `<button class="btn sm" data-act="openclip" ${a}>${ic("send")}Post</button>` : ""}
       </div>
@@ -2526,54 +2681,970 @@ async function ytCookiesCard(logo) {
 }
 async function saveSettings() { const d = {}; $$("#sform [data-s]").forEach(i => d[i.dataset.s] = i.value); await send("/api/settings", d, "PUT"); }
 
-/* ============================================================ clip editor */
-function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; drawClipDlg(true); $("#clipdlg").showModal(); }
+/* ============================================================ clip editor & creation sheet */
+const ED = {
+  jid: null,
+  cid: null,
+  tab: "trim",
+  ratio: "9:16",
+  filter: "normal",
+  volume: 1.0,
+  muted: false,
+  start: 0,
+  end: 0,
+  origStart: 0,
+  origEnd: 0,
+  hook: "",
+  captions: true,
+  style: "bounce",
+  layout: "split",
+  safe_margin: "reels",
+  showSafeGuide: false,
+  showFraming: false,
+  facecam: [10, 10, 40, 40, 0, 0],
+  words: [],
+  text_overlays: [],
+  stickers: [],
+  title: "",
+  description: "",
+  hashtags: [],
+  history: [],
+  future: [],
+  sig: ""
+};
+
+function getFilterCss(f) {
+  switch (f) {
+    case "vivid": return "saturate(1.5) contrast(1.15)";
+    case "dramatic": return "contrast(1.3) brightness(0.9)";
+    case "vintage": return "sepia(0.4) contrast(1.1)";
+    case "bw": return "grayscale(1) contrast(1.2)";
+    case "cyber": return "hue-rotate(180deg) saturate(1.4)";
+    case "warm": return "sepia(0.25) saturate(1.2)";
+    case "cool": return "hue-rotate(200deg) saturate(1.1)";
+    default: return "none";
+  }
+}
+
+function pushHistory() {
+  const snapshot = {
+    start: ED.start,
+    end: ED.end,
+    filter: ED.filter,
+    volume: ED.volume,
+    muted: ED.muted,
+    style: ED.style,
+    captions: ED.captions,
+    layout: ED.layout,
+    ratio: ED.ratio,
+    hook: ED.hook,
+    safe_margin: ED.safe_margin,
+    facecam: [...ED.facecam],
+    text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
+    stickers: JSON.parse(JSON.stringify(ED.stickers)),
+    words: JSON.parse(JSON.stringify(ED.words))
+  };
+  ED.history.push(snapshot);
+  if (ED.history.length > 30) ED.history.shift();
+  ED.future = [];
+  updateUndoRedoBtns();
+}
+
+function edUndo() {
+  if (!ED.history.length) return;
+  const current = {
+    start: ED.start,
+    end: ED.end,
+    filter: ED.filter,
+    volume: ED.volume,
+    muted: ED.muted,
+    style: ED.style,
+    captions: ED.captions,
+    layout: ED.layout,
+    ratio: ED.ratio,
+    hook: ED.hook,
+    safe_margin: ED.safe_margin,
+    facecam: [...ED.facecam],
+    text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
+    stickers: JSON.parse(JSON.stringify(ED.stickers)),
+    words: JSON.parse(JSON.stringify(ED.words))
+  };
+  ED.future.push(current);
+  const prev = ED.history.pop();
+  Object.assign(ED, prev);
+  updateStagePreview();
+  drawTabContent();
+  updateUndoRedoBtns();
+}
+
+function edRedo() {
+  if (!ED.future.length) return;
+  const current = {
+    start: ED.start,
+    end: ED.end,
+    filter: ED.filter,
+    volume: ED.volume,
+    muted: ED.muted,
+    style: ED.style,
+    captions: ED.captions,
+    layout: ED.layout,
+    ratio: ED.ratio,
+    hook: ED.hook,
+    safe_margin: ED.safe_margin,
+    facecam: [...ED.facecam],
+    text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
+    stickers: JSON.parse(JSON.stringify(ED.stickers)),
+    words: JSON.parse(JSON.stringify(ED.words))
+  };
+  ED.history.push(current);
+  const next = ED.future.pop();
+  Object.assign(ED, next);
+  updateStagePreview();
+  drawTabContent();
+  updateUndoRedoBtns();
+}
+
+function updateUndoRedoBtns() {
+  const u = $("#edUndoBtn"), r = $("#edRedoBtn");
+  if (u) u.disabled = ED.history.length === 0;
+  if (r) r.disabled = ED.future.length === 0;
+}
+
+function setTrimStart(val) {
+  val = Math.max(0, Math.min(ED.end - 3, Math.round(Number(val) * 10) / 10));
+  ED.start = val;
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function setTrimEnd(val) {
+  val = Math.max(ED.start + 3, Math.round(Number(val) * 10) / 10);
+  ED.end = val;
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function setTrimStartToCurrent() {
+  const v = $("#edVideo");
+  if (!v) return;
+  setTrimStart(ED.start + v.currentTime);
+}
+
+function setTrimEndToCurrent() {
+  const v = $("#edVideo");
+  if (!v) return;
+  setTrimEnd(ED.start + v.currentTime);
+}
+
+function resetTrim() {
+  ED.start = ED.origStart;
+  ED.end = ED.origEnd;
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function addTextOverlay() {
+  ED.text_overlays.push({ text: "Add text here", color: "#ffffff", font_size: 24, rotation: 0, x: 20, y: 30 });
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function updateTextOverlay(i, key, val) {
+  if (ED.text_overlays[i]) {
+    ED.text_overlays[i][key] = val;
+    updateStagePreview();
+  }
+}
+
+function deleteTextOverlay(i) {
+  ED.text_overlays.splice(i, 1);
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function deleteSticker(i) {
+  ED.stickers.splice(i, 1);
+  pushHistory();
+  updateStagePreview();
+  drawTabContent();
+}
+
+function updateWordText(i, txt) {
+  if (ED.words[i]) {
+    ED.words[i].w = txt;
+  }
+}
+
+function deleteWord(i) {
+  ED.words.splice(i, 1);
+  pushHistory();
+  drawTabContent();
+}
+
+function addEditorWord() {
+  const last = ED.words[ED.words.length - 1];
+  const s = last ? last.e + 0.1 : ED.start;
+  const e = s + 0.5;
+  ED.words.push({ w: "New", s: Math.round(s * 100) / 100, e: Math.round(e * 100) / 100 });
+  pushHistory();
+  drawTabContent();
+}
+
+function updateLiveCaptionsWords(relT) {
+  const liveWords = $("#edLiveWords");
+  const liveBox = $("#edLiveCaptions");
+  if (!liveWords || !liveBox) return;
+
+  if (!ED.captions || !ED.words || !ED.words.length) {
+    liveBox.style.display = "none";
+    return;
+  }
+  liveBox.style.display = "flex";
+
+  const curT = ED.start + (relT || 0);
+  let activeIdx = -1;
+  for (let i = 0; i < ED.words.length; i++) {
+    if (ED.words[i].s <= curT && curT <= ED.words[i].e) {
+      activeIdx = i;
+      break;
+    }
+  }
+  if (activeIdx === -1) {
+    for (let i = 0; i < ED.words.length; i++) {
+      if (Math.abs(ED.words[i].s - curT) < 0.6 || Math.abs(ED.words[i].e - curT) < 0.6) {
+        activeIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (activeIdx === -1) {
+    liveWords.innerHTML = "";
+    return;
+  }
+
+  const startIdx = Math.max(0, activeIdx - 2);
+  const endIdx = Math.min(ED.words.length, activeIdx + 3);
+  const chunk = ED.words.slice(startIdx, endIdx);
+
+  liveWords.innerHTML = chunk.map((w, idx) => {
+    const isAct = (startIdx + idx) === activeIdx;
+    return `<span class="cf-cap-word ${isAct ? 'active' : ''}">${esc(w.w)}</span>`;
+  }).join(" ");
+}
+
+function updateStagePreview() {
+  const v = $("#edVideo");
+  if (v) {
+    v.style.filter = getFilterCss(ED.filter);
+    v.volume = Math.max(0, Math.min(1, ED.volume));
+    v.muted = ED.muted;
+  }
+  const vp = $("#edStageViewport");
+  if (vp) {
+    vp.className = `cf-ed-stage-viewport ratio-${ED.ratio.replace(":", "-")}`;
+  }
+  const guide = $("#edSafeGuide");
+  if (guide) {
+    guide.classList.toggle("active", ED.showSafeGuide);
+    const topBar = guide.querySelector(".safe-top-bar");
+    if (topBar) topBar.textContent = `Header Safe Limit (${esc(ED.safe_margin || 'reels')})`;
+  }
+  const fb = $("#edFramingBox");
+  const supportsFraming = (ED.layout === "split" || ED.layout === "gameplay" || ED.layout === "pip");
+  if (fb) {
+    fb.style.display = (ED.showFraming && supportsFraming) ? "flex" : "none";
+    fb.style.left = ED.facecam[0] + "%";
+    fb.style.top = ED.facecam[1] + "%";
+    fb.style.width = ED.facecam[2] + "%";
+    fb.style.height = ED.facecam[3] + "%";
+  }
+  const capBox = $("#edLiveCaptions");
+  if (capBox) {
+    capBox.className = `cf-live-caption-box cf-style-${ED.style}`;
+    capBox.style.display = ED.captions ? "flex" : "none";
+  }
+  const ovLayer = $("#edOverlaysLayer");
+  if (ovLayer) {
+    ovLayer.innerHTML = `
+      ${ED.text_overlays.map((t, i) => `
+        <div class="cf-stage-text-item" data-item-id="${i}"
+             style="left:${t.x ?? 20}%; top:${t.y ?? 25}%; font-size:${t.font_size || 24}px; color:${t.color || '#ffffff'}; transform: rotate(${t.rotation || 0}deg);">
+          ${esc(t.text || 'Text')}
+        </div>
+      `).join("")}
+      ${ED.stickers.map((s, i) => `
+        <div class="cf-stage-sticker-item" data-item-id="${i}"
+             style="left:${s.x ?? 50}%; top:${s.y ?? 30}%; font-size:${(s.scale || 1) * 32}px;">
+          ${esc(s.emoji || '🔥')}
+        </div>
+      `).join("")}
+    `;
+  }
+  updateUndoRedoBtns();
+}
+
+function initVideoSync() {
+  const v = $("#edVideo");
+  if (!v) return;
+
+  v.ontimeupdate = () => {
+    const relT = v.currentTime;
+    const dur = Math.max(0.1, ED.end - ED.start);
+    const slider = $("#edSeekSlider");
+    if (slider) {
+      slider.max = dur;
+      slider.value = relT;
+    }
+    const timeDisp = $("#edTimeDisplay");
+    if (timeDisp) {
+      timeDisp.textContent = `${fmt(relT)} / ${fmt(dur)}`;
+    }
+    const playhead = $("#edTlPlayhead");
+    if (playhead) {
+      playhead.style.left = `${Math.max(0, Math.min(100, (relT / dur) * 100))}%`;
+    }
+    updateLiveCaptionsWords(v.currentTime);
+  };
+
+  v.onplay = () => {
+    const btn = $("#edPlayBtn");
+    if (btn) btn.innerHTML = ic("pause");
+  };
+
+  v.onpause = () => {
+    const btn = $("#edPlayBtn");
+    if (btn) btn.innerHTML = ic("play");
+  };
+
+  const slider = $("#edSeekSlider");
+  if (slider) {
+    slider.oninput = e => {
+      v.currentTime = Number(e.target.value);
+    };
+  }
+}
+
+function initTimelineTrimHandles() {
+  const wrap = $("#edVideoTrack");
+  if (!wrap) return;
+
+  const startH = $("#edTrimStartHandle");
+  const endH = $("#edTrimEndHandle");
+  let trimDrag = null;
+
+  function onPointerDown(e, which) {
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    trimDrag = { which, startX: e.clientX, rect, initStart: ED.start, initEnd: ED.end };
+    wrap.setPointerCapture(e.pointerId);
+  }
+
+  if (startH) startH.onpointerdown = e => onPointerDown(e, "start");
+  if (endH) endH.onpointerdown = e => onPointerDown(e, "end");
+
+  wrap.onpointermove = e => {
+    if (!trimDrag) return;
+    const dxSec = ((e.clientX - trimDrag.startX) / trimDrag.rect.width) * (trimDrag.initEnd - trimDrag.initStart);
+    if (trimDrag.which === "start") {
+      const ns = Math.max(0, Math.min(ED.end - 3, trimDrag.initStart + dxSec));
+      ED.start = Math.round(ns * 10) / 10;
+    } else {
+      const ne = Math.max(ED.start + 3, trimDrag.initEnd + dxSec);
+      ED.end = Math.round(ne * 10) / 10;
+    }
+    const timeDisp = $("#edTimeDisplay");
+    if (timeDisp) timeDisp.textContent = `0:00 / ${fmt(ED.end - ED.start)}`;
+    const slider = $("#edSeekSlider");
+    if (slider) slider.max = ED.end - ED.start;
+    if (ED.tab === "trim") drawTabContent();
+  };
+
+  wrap.onpointerup = wrap.onpointercancel = () => {
+    if (trimDrag) {
+      pushHistory();
+      trimDrag = null;
+    }
+  };
+}
+
+let dragState = null;
+function initStageInteractions() {
+  const vp = $("#edStageViewport");
+  if (!vp) return;
+
+  vp.onpointerdown = e => {
+    const handle = e.target.closest(".cf-ed-frame-handle");
+    const frame = e.target.closest("#edFramingBox");
+    const textItem = e.target.closest(".cf-stage-text-item");
+    const stickerItem = e.target.closest(".cf-stage-sticker-item");
+
+    const rect = vp.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    if (handle) {
+      e.preventDefault();
+      const type = handle.dataset.handle;
+      dragState = { mode: "resize_frame", type, startX: e.clientX, startY: e.clientY, initBox: [...ED.facecam], rect };
+      vp.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (frame) {
+      e.preventDefault();
+      dragState = { mode: "move_frame", startX: e.clientX, startY: e.clientY, initBox: [...ED.facecam], rect };
+      vp.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (textItem) {
+      e.preventDefault();
+      const id = Number(textItem.dataset.itemId);
+      const item = ED.text_overlays[id];
+      if (item) {
+        dragState = { mode: "move_text", id, startX: e.clientX, startY: e.clientY, initX: item.x ?? 20, initY: item.y ?? 25, rect };
+        vp.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
+    if (stickerItem) {
+      e.preventDefault();
+      const id = Number(stickerItem.dataset.itemId);
+      const item = ED.stickers[id];
+      if (item) {
+        dragState = { mode: "move_sticker", id, startX: e.clientX, startY: e.clientY, initX: item.x ?? 50, initY: item.y ?? 30, rect };
+        vp.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
+  };
+
+  vp.onpointermove = e => {
+    if (!dragState) return;
+    const { mode, startX, startY, rect } = dragState;
+    const dxPct = ((e.clientX - startX) / rect.width) * 100;
+    const dyPct = ((e.clientY - startY) / rect.height) * 100;
+
+    if (mode === "move_frame") {
+      const [ix, iy, iw, ih] = dragState.initBox;
+      const nx = Math.max(0, Math.min(100 - iw, ix + dxPct));
+      const ny = Math.max(0, Math.min(100 - ih, iy + dyPct));
+      ED.facecam[0] = Math.round(nx);
+      ED.facecam[1] = Math.round(ny);
+      const fb = $("#edFramingBox");
+      if (fb) { fb.style.left = ED.facecam[0] + "%"; fb.style.top = ED.facecam[1] + "%"; }
+    } else if (mode === "resize_frame") {
+      const [ix, iy, iw, ih] = dragState.initBox;
+      if (dragState.type === "br") {
+        const nw = Math.max(15, Math.min(100 - ix, iw + dxPct));
+        const nh = Math.max(15, Math.min(100 - iy, ih + dyPct));
+        ED.facecam[2] = Math.round(nw);
+        ED.facecam[3] = Math.round(nh);
+      } else {
+        const nx = Math.max(0, Math.min(ix + iw - 15, ix + dxPct));
+        const ny = Math.max(0, Math.min(iy + ih - 15, iy + dyPct));
+        const nw = iw - (nx - ix);
+        const nh = ih - (ny - iy);
+        ED.facecam[0] = Math.round(nx);
+        ED.facecam[1] = Math.round(ny);
+        ED.facecam[2] = Math.round(nw);
+        ED.facecam[3] = Math.round(nh);
+      }
+      const fb = $("#edFramingBox");
+      if (fb) {
+        fb.style.left = ED.facecam[0] + "%"; fb.style.top = ED.facecam[1] + "%";
+        fb.style.width = ED.facecam[2] + "%"; fb.style.height = ED.facecam[3] + "%";
+      }
+    } else if (mode === "move_text") {
+      const item = ED.text_overlays[dragState.id];
+      if (item) {
+        item.x = Math.max(0, Math.min(90, Math.round(dragState.initX + dxPct)));
+        item.y = Math.max(0, Math.min(90, Math.round(dragState.initY + dyPct)));
+        const el = vp.querySelector(`.cf-stage-text-item[data-item-id="${dragState.id}"]`);
+        if (el) { el.style.left = item.x + "%"; el.style.top = item.y + "%"; }
+      }
+    } else if (mode === "move_sticker") {
+      const item = ED.stickers[dragState.id];
+      if (item) {
+        item.x = Math.max(0, Math.min(90, Math.round(dragState.initX + dxPct)));
+        item.y = Math.max(0, Math.min(90, Math.round(dragState.initY + dyPct)));
+        const el = vp.querySelector(`.cf-stage-sticker-item[data-item-id="${dragState.id}"]`);
+        if (el) { el.style.left = item.x + "%"; el.style.top = item.y + "%"; }
+      }
+    }
+  };
+
+  vp.onpointerup = vp.onpointercancel = () => {
+    if (dragState) {
+      pushHistory();
+      dragState = null;
+    }
+  };
+}
+
+function drawTabContent() {
+  const panel = $("#edTabContent");
+  if (!panel) return;
+  const t = ED.tab;
+  if (t === "trim") {
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Clip Range & Trim</b>
+        <span class="badge" style="font-size:11px">Duration: ${fmt(ED.end - ED.start)}</span>
+      </div>
+      <div class="two">
+        <label class="f">Start (sec)
+          <div style="display:flex;gap:4px;align-items:center">
+            <button class="btn sm" type="button" onclick="setTrimStart(ED.start - 0.5)">-0.5s</button>
+            <input type="number" step="0.5" id="edInpStart" value="${ED.start}" style="text-align:center" onchange="setTrimStart(Number(this.value))">
+            <button class="btn sm" type="button" onclick="setTrimStart(ED.start + 0.5)">+0.5s</button>
+          </div>
+        </label>
+        <label class="f">End (sec)
+          <div style="display:flex;gap:4px;align-items:center">
+            <button class="btn sm" type="button" onclick="setTrimEnd(ED.end - 0.5)">-0.5s</button>
+            <input type="number" step="0.5" id="edInpEnd" value="${ED.end}" style="text-align:center" onchange="setTrimEnd(Number(this.value))">
+            <button class="btn sm" type="button" onclick="setTrimEnd(ED.end + 0.5)">+0.5s</button>
+          </div>
+        </label>
+      </div>
+      <div class="row" style="gap:8px;margin-top:4px">
+        <button class="btn sm" type="button" onclick="setTrimStartToCurrent()">${ic("crop")} Set Start to Now</button>
+        <button class="btn sm" type="button" onclick="setTrimEndToCurrent()">${ic("crop")} Set End to Now</button>
+        <button class="btn sm ghost" type="button" onclick="resetTrim()">${ic("undo")} Reset Trim</button>
+      </div>
+    `;
+  } else if (t === "captions") {
+    const STYLES = [
+      { id: "bounce", name: "Bounce" },
+      { id: "hype", name: "Hype" },
+      { id: "clean", name: "Clean" },
+      { id: "neon", name: "Neon" },
+      { id: "minimal", name: "Minimal" }
+    ];
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <label class="sw"><input type="checkbox" id="edCapToggle" ${ED.captions ? "checked" : ""} onchange="ED.captions=this.checked;pushHistory();updateStagePreview();drawTabContent();"> Generate Captions</label>
+        <span class="sub" style="font-size:11px">${ED.words?.length || 0} words transcribed</span>
+      </div>
+      <label class="f">Hook / Big text<input id="edHookInput" value="${esc(ED.hook)}" placeholder="Wait for it..." onchange="ED.hook=this.value;pushHistory();"></label>
+      <div><b>Caption Style Gallery</b></div>
+      <div class="cf-styles-grid">
+        ${STYLES.map(s => `
+          <div class="cf-style-card ${ED.style === s.id ? "active" : ""}" data-act="edstyle" data-s="${s.id}">
+            <div class="cf-style-card-preview cf-style-${s.id}"><span class="cf-cap-word active">${s.id.toUpperCase()}</span></div>
+            <span class="cf-style-card-name">${s.name}</span>
+          </div>
+        `).join("")}
+      </div>
+      <div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between">
+        <b>Word-by-word Transcript</b>
+        <button class="btn sm" type="button" onclick="addEditorWord()">${ic("plus")} Add Word</button>
+      </div>
+      <div style="max-height:130px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px">
+        ${(ED.words || []).map((w, i) => `
+          <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.03);padding:4px 6px;border-radius:6px">
+            <input type="text" value="${esc(w.w || "")}" style="flex:1;background:transparent;border:1px solid rgba(255,255,255,0.1);color:#fff;padding:2px 6px;border-radius:4px;font-size:12px" onchange="updateWordText(${i}, this.value)">
+            <span class="sub" style="font-size:10px;font-family:monospace;white-space:nowrap">${fmt(w.s)}-${fmt(w.e)}</span>
+            <button class="btn sm icon ghost" type="button" onclick="deleteWord(${i})">${ic("trash")}</button>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } else if (t === "text") {
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Text Overlays</b>
+        <button class="btn sm primary" type="button" onclick="addTextOverlay()">${ic("plus")} Add Text</button>
+      </div>
+      ${!ED.text_overlays.length ? `<p class="help">No text overlays yet. Click 'Add Text' to place text on your video.</p>` : `
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${ED.text_overlays.map((to, i) => `
+            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="text" value="${esc(to.text || "")}" style="flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.15);color:#fff;padding:4px 8px;border-radius:6px;font-size:13px" oninput="updateTextOverlay(${i}, 'text', this.value)">
+                <input type="color" value="${esc(to.color || "#ffffff")}" style="width:32px;height:32px;border:0;background:transparent;cursor:pointer" onchange="updateTextOverlay(${i}, 'color', this.value)">
+                <button class="btn sm icon ghost" type="button" onclick="deleteTextOverlay(${i})">${ic("trash")}</button>
+              </div>
+              <div class="two" style="gap:8px">
+                <label class="f" style="font-size:11px">Size: ${to.font_size || 24}px
+                  <input type="range" min="14" max="64" value="${to.font_size || 24}" oninput="updateTextOverlay(${i}, 'font_size', Number(this.value))">
+                </label>
+                <label class="f" style="font-size:11px">Rotation: ${to.rotation || 0}°
+                  <input type="range" min="-180" max="180" value="${to.rotation || 0}" oninput="updateTextOverlay(${i}, 'rotation', Number(this.value))">
+                </label>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `}
+    `;
+  } else if (t === "stickers") {
+    const STICKERS = ["🔥", "😱", "⚡", "🎯", "🚀", "💥", "👏", "💯", "😂", "👑", "💀", "✨", "🎬", "🍿", "🏆", "💡"];
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Sticker & Emoji Library</b>
+        <span class="sub" style="font-size:11px">Tap to add to video</span>
+      </div>
+      <div class="cf-stickers-grid">
+        ${STICKERS.map(e => `<button class="cf-sticker-btn" data-act="edsticker" data-e="${esc(e)}">${esc(e)}</button>`).join("")}
+      </div>
+      ${ED.stickers.length ? `
+        <div style="margin-top:8px"><b>Active Stickers</b></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${ED.stickers.map((s, i) => `
+            <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 8px;border-radius:6px">
+              <span style="font-size:20px">${esc(s.emoji)}</span>
+              <button class="btn sm icon ghost" type="button" onclick="deleteSticker(${i})">${ic("trash")}</button>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    `;
+  } else if (t === "filters") {
+    const FILTERS = [
+      { id: "normal", name: "Normal", bg: "#64748b" },
+      { id: "vivid", name: "Vivid", bg: "linear-gradient(135deg, #f59e0b, #ef4444)" },
+      { id: "dramatic", name: "Dramatic", bg: "linear-gradient(135deg, #1e1b4b, #4338ca)" },
+      { id: "vintage", name: "Vintage", bg: "linear-gradient(135deg, #78350f, #d97706)" },
+      { id: "bw", name: "B&W", bg: "linear-gradient(135deg, #18181b, #71717a)" },
+      { id: "cyber", name: "Cyber", bg: "linear-gradient(135deg, #06b6d4, #d946ef)" },
+      { id: "warm", name: "Warm", bg: "linear-gradient(135deg, #ea580c, #facc15)" },
+      { id: "cool", name: "Cool", bg: "linear-gradient(135deg, #0284c7, #38bdf8)" }
+    ];
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Color & Style Filters</b>
+        <span class="sub" style="font-size:11px">Current: ${ED.filter}</span>
+      </div>
+      <div class="cf-filters-grid">
+        ${FILTERS.map(f => `
+          <div class="cf-filter-card ${ED.filter === f.id ? "active" : ""}" data-act="edfilter" data-f="${f.id}">
+            <div class="cf-filter-thumb" style="background:${f.bg}"></div>
+            <span>${f.name}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } else if (t === "audio") {
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Audio & Sound Mixer</b>
+        <button class="btn sm ghost" type="button" onclick="ED.volume=1.0;ED.muted=false;pushHistory();updateStagePreview();drawTabContent();">Reset Audio</button>
+      </div>
+      <label class="f">Volume: ${Math.round(ED.volume * 100)}%
+        <input type="range" min="0" max="200" value="${Math.round(ED.volume * 100)}" oninput="ED.volume=this.value/100;updateStagePreview();">
+      </label>
+      <label class="sw" style="margin-top:6px">
+        <input type="checkbox" ${ED.muted ? "checked" : ""} onchange="ED.muted=this.checked;pushHistory();updateStagePreview();">
+        Mute Clip Audio
+      </label>
+    `;
+  } else if (t === "layout") {
+    const LAYOUTS = [
+      { id: "split", name: "Split Screen" },
+      { id: "pip", name: "Picture-in-Picture" },
+      { id: "blur", name: "Fit (Blurred Fill)" },
+      { id: "crop", name: "Crop Fill" },
+      { id: "landscape", name: "Original 16:9" }
+    ];
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Aspect Ratio & Video Framing</b>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn sm ${ED.ratio === '9:16' ? 'primary' : 'ghost'}" data-act="edratio" data-r="9:16">9:16 (Shorts/Reels)</button>
+        <button class="btn sm ${ED.ratio === '16:9' ? 'primary' : 'ghost'}" data-act="edratio" data-r="16:9">16:9 (Landscape)</button>
+        <button class="btn sm ${ED.ratio === '1:1' ? 'primary' : 'ghost'}" data-act="edratio" data-r="1:1">1:1 (Square)</button>
+      </div>
+      <div style="margin-top:6px"><b>Visual Layout Presets</b></div>
+      <div class="cf-layouts-grid">
+        ${LAYOUTS.map(l => `
+          <div class="cf-layout-card ${ED.layout === l.id ? "active" : ""}" data-act="edlayout" data-l="${l.id}">
+            <div class="cf-layout-icon-box">
+              <div style="flex:1;background:rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;font-size:9px">${l.id === 'split' ? 'Cam' : ''}</div>
+              <div style="flex:1;background:rgba(99,102,241,0.25);display:flex;align-items:center;justify-content:center;font-size:9px">Game</div>
+            </div>
+            <span>${l.name}</span>
+          </div>
+        `).join("")}
+      </div>
+      <div class="two" style="margin-top:6px">
+        <label class="f">Safe Margins
+          <select id="edSafeSelect" onchange="ED.safe_margin=this.value;pushHistory();updateStagePreview();">
+            <option value="reels" ${ED.safe_margin === 'reels' ? 'selected' : ''}>Instagram Reels (9:16)</option>
+            <option value="tiktok" ${ED.safe_margin === 'tiktok' ? 'selected' : ''}>TikTok (9:16)</option>
+            <option value="shorts" ${ED.safe_margin === 'shorts' ? 'selected' : ''}>YouTube Shorts</option>
+            <option value="none" ${ED.safe_margin === 'none' ? 'selected' : ''}>Full Frame (None)</option>
+          </select>
+        </label>
+        <div style="display:flex;gap:6px;align-items:flex-end">
+          <button class="btn sm ${ED.showSafeGuide ? 'primary' : ''}" data-act="togglesafeguide">${ic("crop")} Safe Guide</button>
+          ${(ED.layout === "split" || ED.layout === "gameplay" || ED.layout === "pip") ? `<button class="btn sm ${ED.showFraming ? 'primary' : ''}" data-act="toggleframing">${ic("sidebar")} Framing Box</button>` : ""}
+        </div>
+      </div>
+    `;
+  } else if (t === "post") {
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <b>Post Details & Publishing</b>
+        <button class="btn sm" data-act="writetext">Write again with AI</button>
+      </div>
+      <label class="f">Title<input id="edPostTitle" data-f="title" value="${esc(ED.title)}" oninput="ED.title=this.value;$('#edTitleDisplay').textContent=this.value||'Untitled Clip';"></label>
+      <label class="f">Description<textarea id="edPostDesc" data-f="description" rows="2" oninput="ED.description=this.value;">${esc(ED.description)}</textarea></label>
+      <label class="f">Hashtags<input id="edPostHash" data-f="hashtags" value="${esc((ED.hashtags || []).join(" "))}" placeholder="gaming viral clutch" oninput="ED.hashtags=this.value.split(/\\s+/).map(h=>h.replace(/^#+/,'')).filter(Boolean);"></label>
+      <div id="dposts" class="row" style="gap:4px"></div>
+      ${S.accounts.length ? `
+        <div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
+        <div class="row" style="margin-top:4px"><button class="btn primary" data-act="postnow">${ic("send")} Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>
+      ` : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
+    `;
+  }
+}
+
+async function exportClip() {
+  const btn = $("#edExportBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    const payload = {
+      start: Number(ED.start),
+      end: Number(ED.end),
+      hook: ED.hook,
+      captions: ED.captions,
+      style: ED.style,
+      layout: ED.layout,
+      safe_margin: ED.safe_margin,
+      filter: ED.filter,
+      volume: Number(ED.volume),
+      muted: Boolean(ED.muted),
+      facecam: ED.facecam,
+      words: ED.words,
+      text_overlays: ED.text_overlays,
+      stickers: ED.stickers,
+      title: ED.title,
+      description: ED.description,
+      hashtags: ED.hashtags
+    };
+    await send(`/api/jobs/${ED.jid}/clips/${ED.cid}/render`, payload);
+    toast("Re-making clip with your edits…", "ok");
+    $("#clipdlg").close();
+    tick();
+  } catch (err) {
+    toast(err.message, "bad");
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ic("scissors")} Export`; }
+  }
+}
+
+function openCreateSheet() {
+  const dlg = $("#createdlg");
+  if (!dlg) return;
+  dlg.innerHTML = `
+    <div class="cf-create-sheet">
+      <div class="cf-create-title">
+        <span>Create New Clip</span>
+        <button class="btn icon ghost" data-act="closecreate" aria-label="Close">${ic("x")}</button>
+      </div>
+      <div class="cf-create-opt-list">
+        <button class="cf-create-opt-item" data-act="sheetupload">
+          <div class="cf-create-opt-icon">${ic("film")}</div>
+          <div class="cf-create-opt-text">
+            <h4>Upload Video</h4>
+            <p>Choose an MP4, MOV, or WEBM video from your phone</p>
+          </div>
+        </button>
+        <button class="cf-create-opt-item" data-act="sheetlink">
+          <div class="cf-create-opt-icon">${ic("link")}</div>
+          <div class="cf-create-opt-text">
+            <h4>Paste Video Link</h4>
+            <p>YouTube, Twitch, or Kick stream URL</p>
+          </div>
+        </button>
+        <button class="cf-create-opt-item" data-act="sheetlibrary">
+          <div class="cf-create-opt-icon">${ic("film_f")}</div>
+          <div class="cf-create-opt-text">
+            <h4>Select from Library</h4>
+            <p>Browse existing videos and generated clips</p>
+          </div>
+        </button>
+        <button class="cf-create-opt-item" data-act="sheeteditor">
+          <div class="cf-create-opt-icon">${ic("scissors")}</div>
+          <div class="cf-create-opt-text">
+            <h4>Open Clip in Video Editor</h4>
+            <p>Fine-tune trims, live captions, text, and filters</p>
+          </div>
+        </button>
+      </div>
+    </div>
+  `;
+  dlg.showModal();
+}
+
+function openClip(jid, cid) {
+  D.jid = jid; D.cid = cid; D.sig = "";
+  const j = jobOf(jid), c = j?.clips.find(x => x.id === cid);
+  if (!c) return;
+
+  ED.jid = jid;
+  ED.cid = cid;
+  ED.tab = "trim";
+  ED.ratio = c.layout === "landscape" ? "16:9" : (c.layout === "square" ? "1:1" : "9:16");
+  ED.filter = c.filter || "normal";
+  ED.volume = c.volume != null ? c.volume : 1.0;
+  ED.muted = c.muted === true;
+  ED.start = c.start || 0;
+  ED.end = c.end || (c.start + 15);
+  ED.origStart = ED.start;
+  ED.origEnd = ED.end;
+  ED.hook = c.hook || "";
+  ED.captions = c.captions !== false;
+  ED.style = c.style || "bounce";
+  ED.layout = c.layout || "split";
+  ED.safe_margin = c.safe_margin || "reels";
+  ED.showSafeGuide = false;
+  ED.showFraming = (c.layout === "split" || c.layout === "pip" || c.layout === "gameplay");
+  ED.facecam = Array.isArray(c.facecam) && c.facecam.length >= 4 ? [...c.facecam] : [10, 10, 40, 40, 0, 0];
+  ED.words = [];
+  ED.text_overlays = Array.isArray(c.text_overlays) ? JSON.parse(JSON.stringify(c.text_overlays)) : [];
+  ED.stickers = Array.isArray(c.stickers) ? JSON.parse(JSON.stringify(c.stickers)) : [];
+  ED.title = c.title || "";
+  ED.description = c.description || "";
+  ED.hashtags = Array.isArray(c.hashtags) ? [...c.hashtags] : [];
+  ED.history = [];
+  ED.future = [];
+
+  drawClipDlg(true);
+  $("#clipdlg").showModal();
+
+  api(`/api/jobs/${jid}/clips/${cid}/words`).then(res => {
+    if (res && Array.isArray(res.words)) {
+      ED.words = res.words;
+      const track = $("#edCaptionTrack");
+      if (track) track.innerHTML = `<span style="color:#64748b;font-size:9px;">CAPTIONS (${ED.words.length} words)</span>`;
+      if (ED.tab === "captions") drawTabContent();
+    }
+  }).catch(() => {});
+}
+
 function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
   const m = `/media/${j.id}/`, sig = c.status + c.version;
-  const stage = c.status === "done" ? `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;max-width:100%;max-height:100%;height:100%"><video src="${m}${esc(c.file)}?v=${c.version}" poster="${m}${esc(c.cover)}?v=${c.version}" controls autoplay playsinline webkit-playsinline muted style="max-height:100%;max-width:100%;width:auto;height:100%;object-fit:contain"></video><div id="safeZoneOverlay" class="safe-zone-overlay"><div class="safe-top-bar">Header Safe Limit</div><div class="safe-right-bar">Reels Action Buttons</div><div class="safe-bottom-bar">Captions/Audio Safe Limit</div></div></div>`
-    : c.status === "error" ? `<div class="err" style="padding:20px;text-align:center">${esc(c.error || "Could not make this clip.")}</div>`
-    : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
+
   if (full) {
-    dlg.innerHTML = `<div class="editor"><div class="stage" id="stage">${stage}</div>
-      <div class="panel">
-        <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score : "Clipped by hand"}</span>
-          <p class="sub" style="margin-top:8px">${esc(c.reason || "")}</p></div><button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button></div>
-        <h3>On the video</h3>
-        <label class="f">Big text<input data-f="hook" value="${esc(c.hook)}"></label>
-        <label class="sw"><input type="checkbox" data-f="captions" data-caption-toggle ${c.captions === false ? "" : "checked"}>Generate captions</label>
-        <div class="two"><label class="f">Caption style<select data-f="style" data-caption-style ${c.captions === false ? "disabled" : ""}>${opts(S.status.styles, c.style)}</select></label>
-          <label class="f">Layout<select data-f="layout">${opts(S.status.layouts, c.layout)}</select></label></div>
-        <div class="two"><label class="f">Safe Margins<select data-f="safe_margin">${opts(S.status.safe_margins || {"reels":"Instagram Reels (9:16 safe)","tiktok":"TikTok (9:16 safe)","shorts":"YouTube Shorts","none":"Full Frame"}, c.safe_margin || "reels")}</select></label>
-          <label class="f" style="display:flex;align-items:flex-end"><button type="button" class="btn" style="width:100%;height:38px;gap:6px" onclick="$('#safeZoneOverlay')?.classList.toggle('active')">${ic("crop")} Safe Guide</button></label></div>
-        <div class="two"><label class="f">Start (seconds)<input data-f="start" type="number" step="0.5" value="${c.start}"></label>
-          <label class="f">End (seconds)<input data-f="end" type="number" step="0.5" value="${c.end}"></label></div>
-        <div class="row" style="justify-content:space-between;align-items:center"><h3>Post text</h3>
-          <button class="btn sm" data-act="writetext">Write again with AI</button></div>
-        <label class="f">Title<input data-f="title" value="${esc(c.title)}"></label>
-        <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description)}</textarea></label>
-        <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).join(" "))}" placeholder="funny gaming clutch"></label>
-        <button class="btn" data-act="remake">${ic("scissors")}Save and re-make clip</button>
-        <h3>Post it</h3>
-        <div id="dposts" class="row" style="gap:4px"></div>
-        ${S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
-          <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
-          : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
-        <div class="row clip-actions-bar" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
-          ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
-          <button class="btn" data-act="copy" data-j="${j.id}" data-c="${esc(c.id)}">${ic("copy")}Copy post text</button></div>
-      </div></div>`;
-  } else if (D.sig !== sig) $("#stage").innerHTML = stage;
-  D.sig = sig;
-  put($("#dposts"), postPills(c));
+    const stageVideo = c.status === "done"
+      ? `<video id="edVideo" class="cf-ed-video" src="${m}${esc(c.file)}?v=${c.version}" poster="${m}${esc(c.cover)}?v=${c.version}" playsinline webkit-playsinline></video>`
+      : c.status === "error"
+      ? `<div class="err" style="padding:20px;text-align:center;margin:auto">${esc(c.error || "Could not make this clip.")}</div>`
+      : `<div class="making" style="margin:auto;display:flex;align-items:center;justify-content:center;height:100%;font-size:13px;color:#94a3b8">${c.status === "rendering" ? "Rendering clip preview…" : "Clip queued for rendering…"}</div>`;
+
+    dlg.innerHTML = `
+      <div class="cf-editor">
+        <div class="cf-ed-top">
+          <div class="cf-ed-top-left">
+            <button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button>
+            <div class="cf-ed-title" id="edTitleDisplay" title="${esc(ED.title || 'Untitled Clip')}">${esc(ED.title || 'Untitled Clip')}</div>
+          </div>
+          <div class="cf-ed-top-right">
+            <button class="btn icon ghost" id="edUndoBtn" data-act="edundo" title="Undo" disabled>${ic("undo")}</button>
+            <button class="btn icon ghost" id="edRedoBtn" data-act="edredo" title="Redo" disabled>${ic("redo")}</button>
+            ${c.status === "done" ? `<a class="cf-ed-btn" href="${m}${esc(c.file)}?download=1" download="${esc(c.title || 'clip')}.mp4">${ic("down")}</a>` : ""}
+            <button class="cf-ed-btn primary" id="edExportBtn" data-act="edexport">${ic("scissors")} Export</button>
+          </div>
+        </div>
+
+        <div class="cf-ed-stage-box" id="edStageBox">
+          <div class="cf-ed-stage-viewport ratio-${ED.ratio.replace(":", "-")}" id="edStageViewport">
+            ${stageVideo}
+            <div id="edSafeGuide" class="safe-zone-overlay ${ED.showSafeGuide ? 'active' : ''}">
+              <div class="safe-top-bar">Header Safe Limit (${esc(ED.safe_margin || 'reels')})</div>
+              <div class="safe-right-bar">Actions Bar Safe Limit</div>
+              <div class="safe-bottom-bar">Captions/Audio Safe Limit</div>
+            </div>
+            <div id="edFramingBox" class="cf-ed-frame-box" style="display:${ED.showFraming ? 'flex' : 'none'}; left:${ED.facecam[0]}%; top:${ED.facecam[1]}%; width:${ED.facecam[2]}%; height:${ED.facecam[3]}%;">
+              <span>Facecam / Focus</span>
+              <div class="cf-ed-frame-handle br" data-handle="br"></div>
+              <div class="cf-ed-frame-handle tl" data-handle="tl"></div>
+            </div>
+            <div class="cf-ed-overlay-layer" id="edOverlaysLayer"></div>
+            <div class="cf-live-caption-box cf-style-${ED.style}" id="edLiveCaptions" style="display:${ED.captions ? 'flex' : 'none'}">
+              <div class="cf-caption-line" id="edLiveWords"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="cf-ed-playbar">
+          <button class="cf-ed-play-btn" id="edPlayBtn" data-act="edplay" aria-label="Play/Pause">${ic("play")}</button>
+          <div class="cf-ed-time-txt" id="edTimeDisplay">0:00 / ${fmt(ED.end - ED.start)}</div>
+          <input type="range" class="cf-ed-seek-slider" id="edSeekSlider" min="0" max="${Math.max(1, ED.end - ED.start)}" step="0.1" value="0">
+        </div>
+
+        <div class="cf-ed-timeline-wrap" id="edTimelineWrap">
+          <div class="cf-tl-ruler">
+            <span>0s</span><span>${fmt((ED.end - ED.start) / 2)}</span><span>${fmt(ED.end - ED.start)}</span>
+          </div>
+          <div class="cf-tl-track video-track" id="edVideoTrack">
+            <div class="cf-tl-playhead" id="edTlPlayhead" style="left:0%;"></div>
+            <div class="cf-tl-range-bar" style="left:0%; right:0%;">
+              <div class="cf-trim-handle start" id="edTrimStartHandle" title="Start trim handle"></div>
+              <span style="font-size:10px;color:#fff;font-weight:700;">Clip Duration ${fmt(ED.end - ED.start)}</span>
+              <div class="cf-trim-handle end" id="edTrimEndHandle" title="End trim handle"></div>
+            </div>
+          </div>
+          <div class="cf-tl-track" id="edCaptionTrack">
+            <span style="color:#64748b;font-size:9px;">CAPTIONS (${ED.captions ? (ED.words?.length || 0) + ' words' : 'OFF'})</span>
+          </div>
+        </div>
+
+        <div class="cf-ed-bottom-panel">
+          <div class="cf-ed-tabs-bar">
+            <button class="cf-ed-tab-btn ${ED.tab === 'trim' ? 'active' : ''}" data-act="edtab" data-t="trim">${ic("crop")} Trim</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'captions' ? 'active' : ''}" data-act="edtab" data-t="captions">${ic("sparkle")} Captions</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'text' ? 'active' : ''}" data-act="edtab" data-t="text">${ic("text")} Text</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'stickers' ? 'active' : ''}" data-act="edtab" data-t="stickers">${ic("sticker")} Stickers</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'filters' ? 'active' : ''}" data-act="edtab" data-t="filters">${ic("sliders")} Filters</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'audio' ? 'active' : ''}" data-act="edtab" data-t="audio">${ic("audio")} Audio</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'layout' ? 'active' : ''}" data-act="edtab" data-t="layout">${ic("sidebar")} Layout</button>
+            <button class="cf-ed-tab-btn ${ED.tab === 'post' ? 'active' : ''}" data-act="edtab" data-t="post">${ic("send")} Post</button>
+          </div>
+          <div class="cf-ed-tab-content" id="edTabContent"></div>
+        </div>
+      </div>
+    `;
+    drawTabContent();
+    updateStagePreview();
+    initVideoSync();
+    initTimelineTrimHandles();
+    initStageInteractions();
+    D.sig = sig;
+  } else if (D.sig !== sig) {
+    D.sig = sig;
+    const v = $("#edVideo");
+    if (v && c.status === "done" && !v.src.includes(c.file)) {
+      v.src = `${m}${esc(c.file)}?v=${c.version}`;
+      v.poster = `${m}${esc(c.cover)}?v=${c.version}`;
+    }
+  }
 }
-function postText() {   // the post text as it is in the clip editor right now
-  const v = k => $(`#clipdlg [data-f="${k}"]`).value;
-  return {title: v("title"), description: v("description"), hashtags: v("hashtags").split(/\s+/).map(h => h.replace(/^#+/, "")).filter(Boolean)};
+
+function postText() {
+  const v = k => $(`#clipdlg [data-f="${k}"]`)?.value || ED[k] || "";
+  const h = v("hashtags");
+  const tags = Array.isArray(h) ? h : (typeof h === "string" ? h.split(/\s+/).map(x => x.replace(/^#+/, "")).filter(Boolean) : []);
+  return {title: v("title"), description: v("description"), hashtags: tags};
 }
-$("#clipdlg").addEventListener("close", () => { $("#clipdlg").innerHTML = ""; D.jid = null; });
+$("#clipdlg").addEventListener("close", () => {
+  const v = $("#edVideo");
+  if (v) v.pause();
+  $("#clipdlg").innerHTML = "";
+  D.jid = null;
+  ED.jid = null;
+  ED.cid = null;
+});
 $("#clipdlg").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+$("#createdlg")?.addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 
 /* ============================================================ render + polling */
 function render() {
@@ -2725,6 +3796,111 @@ document.addEventListener("click", async e => {
     if (a === "addmore") { const u = $("#url"); return u && !u.value ? (u.focus(), toast("Paste another link, or drop a file anywhere on the box.")) : $("#file").click(); }
     if (a === "closedlg") return $("#clipdlg").close();
     if (a === "openclip") return openClip(d.j, d.c);
+    if (a === "add") return openCreateSheet();
+    if (a === "closecreate") return $("#createdlg")?.close();
+    if (a === "sheetupload") { $("#createdlg")?.close(); return $("#file")?.click(); }
+    if (a === "sheetlink") { $("#createdlg")?.close(); go("overview"); return setTimeout(() => $("#url")?.focus(), 150); }
+    if (a === "sheetlibrary") { $("#createdlg")?.close(); return go("library"); }
+    if (a === "sheeteditor") {
+      $("#createdlg")?.close();
+      let foundJob = null, foundClip = null;
+      for (const j of S.jobs) { if (j.clips && j.clips.length) { foundJob = j; foundClip = j.clips[0]; break; } }
+      if (foundClip) return openClip(foundJob.id, foundClip.id);
+      return toast("No clips made yet. Add a video to make your first clip!", "ok");
+    }
+    if (a === "playclip") return openClip(d.j, d.c);
+    if (a === "shareclip") {
+      const j = jobOf(d.j), c = j?.clips.find(x => x.id === d.c);
+      if (c) {
+        const u = `${location.origin}/media/${j.id}/${esc(c.file)}`;
+        if (navigator.share) { navigator.share({title: c.title || c.hook, text: c.description || "", url: u}).catch(() => {}); }
+        else { await navigator.clipboard.writeText(u); toast("Clip download link copied!", "ok"); }
+      }
+      return;
+    }
+    if (a === "togglemore") {
+      const m = b.nextElementSibling;
+      const was = m?.classList.contains("open");
+      $$(".cf-more-dropdown.open").forEach(dd => dd.classList.remove("open"));
+      if (m && !was) m.classList.add("open");
+      return;
+    }
+    if (a === "renameclip") {
+      const j = jobOf(d.j), c = j?.clips.find(x => x.id === d.c);
+      if (c) {
+        const cur = c.title || "";
+        const n = prompt("Rename clip title:", cur);
+        if (n !== null && n.trim() && n.trim() !== cur) {
+          await send(`/api/jobs/${d.j}/clips/${d.c}/rename`, {title: n.trim()}, "PUT");
+          c.title = n.trim();
+          render();
+          toast("Clip renamed", "ok");
+        }
+      }
+      return;
+    }
+    if (a === "edundo") return edUndo();
+    if (a === "edredo") return edRedo();
+    if (a === "edexport") return exportClip();
+    if (a === "edplay") {
+      const v = $("#edVideo");
+      if (v) { if (v.paused) v.play(); else v.pause(); }
+      return;
+    }
+    if (a === "edtab") {
+      ED.tab = d.t;
+      $$(".cf-ed-tab-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.t === d.t));
+      return drawTabContent();
+    }
+    if (a === "edstyle") {
+      ED.style = d.s;
+      pushHistory();
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "edlayout") {
+      ED.layout = d.l;
+      if (d.l === "landscape") ED.ratio = "16:9";
+      else if (d.l === "square") ED.ratio = "1:1";
+      else ED.ratio = "9:16";
+      ED.showFraming = (d.l === "split" || d.l === "pip" || d.l === "gameplay");
+      pushHistory();
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "edfilter") {
+      ED.filter = d.f;
+      pushHistory();
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "edsticker") {
+      ED.stickers.push({emoji: d.e, x: 45, y: 30, scale: 1.0});
+      pushHistory();
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "edratio") {
+      ED.ratio = d.r;
+      pushHistory();
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "toggleframing") {
+      const supportsFraming = (ED.layout === "split" || ED.layout === "gameplay" || ED.layout === "pip");
+      if (supportsFraming) {
+        ED.showFraming = !ED.showFraming;
+      } else {
+        ED.showFraming = false;
+      }
+      updateStagePreview();
+      return drawTabContent();
+    }
+    if (a === "togglesafeguide") {
+      ED.showSafeGuide = !ED.showSafeGuide;
+      updateStagePreview();
+      return drawTabContent();
+    }
     if (a === "newcreator") {
       const dlg = $("#formdlg");
       dlg.innerHTML = `<form method="dialog" class="dlg"><h2>New creator</h2><p class="help">Each creator gets their own workspace, folder, settings and accounts.</p>

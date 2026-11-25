@@ -382,6 +382,10 @@ def request_render(jid, cid, changes: dict):
     for k in ("start", "end"):
         if k in changes:
             new[k] = round(float(changes[k]), 2)
+            clip.pop("fixed_words", None)
+            clip.pop("fixed_for", None)
+            new.pop("fixed_words", None)
+            new.pop("fixed_for", None)
     if "src_offset" in clip:  # live clip: can only move inside the saved piece of stream
         new["start"] = max(new["start"], clip["src_offset"])
         new["end"] = min(new["end"], clip["src_end"])
@@ -400,6 +404,28 @@ def request_render(jid, cid, changes: dict):
         new["layout"] = DEFAULTS["layout"]
     if new.get("safe_margin") not in getattr(render, "SAFE_MARGINS", {}):
         new["safe_margin"] = DEFAULTS["safe_margin"]
+    if "filter" in changes:
+        new["filter"] = str(changes["filter"])[:20]
+    if "volume" in changes:
+        try:
+            new["volume"] = max(0.0, min(3.0, float(changes["volume"])))
+        except (ValueError, TypeError):
+            pass
+    if "muted" in changes:
+        new["muted"] = bool(changes["muted"])
+    if "facecam" in changes and isinstance(changes["facecam"], (list, tuple)):
+        new["facecam"] = [int(v) for v in changes["facecam"][:6]]
+    if "words" in changes and isinstance(changes["words"], list):
+        new["words"] = changes["words"]
+        new["custom_words"] = True
+        clip.pop("fixed_words", None)
+        clip.pop("fixed_for", None)
+        new.pop("fixed_words", None)
+        new.pop("fixed_for", None)
+    if "text_overlays" in changes and isinstance(changes["text_overlays"], list):
+        new["text_overlays"] = changes["text_overlays"]
+    if "stickers" in changes and isinstance(changes["stickers"], list):
+        new["stickers"] = changes["stickers"]
     clip.update(new, status="queued")
     save(job)
     _q.put(("clip", jid, cid))
@@ -467,7 +493,8 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
-        near = _caption_words(job, clip, words, off) if clip.get("captions", True) else []
+        words_to_use = clip.get("words") if (clip.get("words") and isinstance(clip.get("words"), list)) else words
+        near = _caption_words(job, clip, words_to_use, off) if clip.get("captions", True) else []
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
@@ -488,12 +515,23 @@ def render_one(job, clip, words):
 
 
 def _caption_words(job, clip, words, off):
+    def _f(val, fallback=0.0):
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return fallback
+
+    if clip.get("custom_words") or ("words" in clip and isinstance(clip["words"], list) and clip["words"]):
+        raw_words = clip.get("words") or words
+        raw = [w for w in raw_words if isinstance(w, dict) and clip["start"] - 0.5 <= _f(w.get("s")) <= clip["end"] + 0.5]
+        return [dict(w, s=_f(w.get("s")) - off, e=_f(w.get("e")) - off) for w in roman.words(raw)]
+
     span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
     if clip.get("fixed_for") == span and clip.get("fixed_words") and not any(
             roman.needs_roman(w.get("w", "")) for w in clip["fixed_words"]):
         raw = clip["fixed_words"]          # already tidied for this exact span: no second AI call
     else:
-        raw = [w for w in words if clip["start"] - 1 <= w["s"] <= clip["end"] + 1]
+        raw = [w for w in words if isinstance(w, dict) and clip["start"] - 1 <= _f(w.get("s")) <= clip["end"] + 1]
         try:
             usage.set_context(job.get("creator"), job.get("title") or "")
             raw = brain.english_captions(raw, job.get("lang") or "", job.get("title") or "",
@@ -502,7 +540,7 @@ def _caption_words(job, clip, words, off):
         except Exception:  # noqa: BLE001 - captions still render with the words as heard
             pass
     # the last word on it: whatever was said, nothing is drawn in Hindi or Urdu script
-    return [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(raw)]
+    return [dict(w, s=_f(w.get("s")) - off, e=_f(w.get("e")) - off) for w in roman.words(raw)]
 
 
 CLIP_MINUTES = float(config.env("PEAKCUT_CLIP_MINUTES", "15"))     # the longest one clip may take to make
@@ -928,7 +966,13 @@ def _worker(quick_only=False):
                 clip = next(c for c in job["clips"] if c["id"] == cid)
                 words = []
                 if clip.get("captions", True):
-                    words = json.loads((Path(job["dir"]) / "words.json").read_text(encoding="utf-8"))
+                    if "words" in clip and isinstance(clip["words"], list) and clip["words"]:
+                        words = clip["words"]
+                    else:
+                        try:
+                            words = json.loads((Path(job["dir"]) / "words.json").read_text(encoding="utf-8"))
+                        except Exception:
+                            words = []
                 render_one(job, clip, words)
         except Exception as e:  # noqa: BLE001
             (Path(job["dir"]) / "error.log").write_text(traceback.format_exc(), encoding="utf-8")

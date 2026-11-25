@@ -223,6 +223,11 @@ def missing(force: bool = False) -> list:
     return list(_seen["missing"])
 
 
+def is_available(name: str = "ffmpeg") -> bool:
+    """Return True if the specified binary (ffmpeg or ffprobe) is resolved and verified."""
+    return name in NEEDED and name not in missing()
+
+
 def get_diagnostics() -> dict:
     """Return structured capability and path diagnostics for FFmpeg and FFprobe."""
     if not _BINARIES:

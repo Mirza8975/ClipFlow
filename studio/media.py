@@ -101,12 +101,49 @@ def cookie_opts() -> dict:
     return {"cookiefile": str(config.YT_COOKIES)} if config.YT_COOKIES.is_file() else {}
 
 
+def _patch_yt_dlp_ffmpeg(yt_dlp_mod=None):
+    """Ensure yt-dlp locates and executes bundled FFmpeg and FFprobe on Android and all platforms."""
+    try:
+        from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
+        if not getattr(FFmpegPostProcessor, "_clipflow_patched", False):
+            orig_determine = getattr(FFmpegPostProcessor, "_determine_executables", None)
+
+            def patched_determine(self):
+                ffmpeg_bin = _tools.get_ffmpeg()
+                ffprobe_bin = _tools.get_ffprobe()
+                paths = {}
+                if ffmpeg_bin and _tools.is_available("ffmpeg"):
+                    paths["ffmpeg"] = ffmpeg_bin
+                if ffprobe_bin and _tools.is_available("ffprobe"):
+                    paths["ffprobe"] = ffprobe_bin
+                if orig_determine:
+                    try:
+                        orig = orig_determine(self)
+                        if isinstance(orig, dict):
+                            for k, v in orig.items():
+                                if not paths.get(k) and v:
+                                    paths[k] = v
+                    except Exception:
+                        pass
+                return paths
+
+            FFmpegPostProcessor._determine_executables = patched_determine
+            FFmpegPostProcessor._clipflow_patched = True
+    except Exception:
+        pass
+
+
 def _ydl(opts):
     import yt_dlp
+    _patch_yt_dlp_ffmpeg(yt_dlp)
+    extra = {}
+    ffmpeg_bin = _tools.get_ffmpeg()
+    if ffmpeg_bin and _tools.is_available("ffmpeg"):
+        extra["ffmpeg_location"] = ffmpeg_bin
     # a channel or playlist link is answered as "a list" straight away, never walked video by video
     return yt_dlp.YoutubeDL({"noplaylist": True, "quiet": True, "no_warnings": True, "logger": _Quiet(),
                              "extract_flat": "in_playlist", "playlistend": 1, "socket_timeout": 20,
-                             "concurrent_fragment_downloads": 4, **cookie_opts(), **opts})
+                             "concurrent_fragment_downloads": 4, **cookie_opts(), **extra, **opts})
 
 
 def _video_format(height):
@@ -272,6 +309,28 @@ def download(url: str, job_dir: Path, height=720) -> Path:
     return _biggest(job_dir, "source")
 
 
+def _is_range_fallback_eligible(e: Exception) -> bool:
+    """Only allow full-source download fallback for identified, recoverable range/downloader failures."""
+    if isinstance(e, (KeyboardInterrupt, SystemExit, YouTubeBlocked)):
+        return False
+    msg = str(e).lower()
+    unrecoverable = [
+        "getaddrinfo failed", "nameresolutionerror", "connection refused", "connection reset",
+        "timed out", "timeout", "network is unreachable", "no route to host",
+        "401", "403", "404", "sign in to confirm", "confirm you're not a bot",
+        "not a bot", "private video", "this video is private", "login required",
+        "enospc", "no space left", "disk full", "cancelled"
+    ]
+    if any(u in msg for u in unrecoverable):
+        return False
+    recoverable = [
+        "ffmpeg is not installed", "ffmpeg was not found", "download_ranges",
+        "byte ranges", "range not satisfiable", "416", "force_keyframes_at_cuts",
+        "external downloader", "postprocessing: error opening output files"
+    ]
+    return any(r in msg for r in recoverable)
+
+
 def download_section(url: str, out_dir: Path, stem: str, start: float, end: float, height=720, exact=False) -> Path:
     """Just one stretch of the video. The cut lands on a keyframe, so find_offset() pins the true start; with
     exact=True the cut is made at exactly `start` instead (slower), for when there is nothing to match against."""
@@ -281,9 +340,53 @@ def download_section(url: str, out_dir: Path, stem: str, start: float, end: floa
             "download_ranges": download_range_func(None, [(max(0.0, start), end)])}
     if exact:
         opts["force_keyframes_at_cuts"] = True
-    with _youtube_guard(url), _ydl(opts) as ydl:
-        ydl.download([url])
-    return _biggest(out_dir, stem)
+    try:
+        with _youtube_guard(url), _ydl(opts) as ydl:
+            ydl.download([url])
+        return _biggest(out_dir, stem)
+    except Exception as e:
+        if not _is_range_fallback_eligible(e):
+            raise
+
+        # Check available storage before falling back to full-video download
+        try:
+            from . import load, storage
+            if load.disk_full():
+                raise RuntimeError(f"Cannot download full video for partial extraction: insufficient disk space on {storage.drive_of(out_dir)}. {storage.full_message()}") from e
+            import shutil
+            free_gb = shutil.disk_usage(out_dir).free / 1e9
+            if free_gb < load.MIN_FREE_DISK_GB:
+                raise RuntimeError(f"Cannot download full video: only {free_gb:.1f} GB free on {storage.drive_of(out_dir)}, needs at least {load.MIN_FREE_DISK_GB:g} GB.") from e
+        except (ImportError, AttributeError):
+            pass
+
+        full_src = None
+        target = out_dir / f"{stem}.mp4"
+        dur = max(0.1, end - start)
+        try:
+            full_src = download(url, out_dir, height=height)
+            if exact:
+                cut_args = ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
+                            "-i", str(full_src), "-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast", str(target)]
+                run(cut_args)
+            else:
+                cut_args = ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
+                            "-i", str(full_src), "-c:v", "copy", "-c:a", "copy", str(target)]
+                try:
+                    run(cut_args)
+                except Exception:
+                    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
+                         "-i", str(full_src), "-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast", str(target)])
+            if target.is_file() and target.stat().st_size > 0:
+                return target
+            raise RuntimeError(f"FFmpeg failed to produce {target.name}")
+        except Exception as inner_e:
+            if isinstance(inner_e, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise RuntimeError(f"Could not fetch this part of the video: {e} (Fallback failed: {inner_e})") from e
+        finally:
+            if full_src and full_src != target and full_src.is_file():
+                full_src.unlink(missing_ok=True)
 
 
 def find_offset(full: np.ndarray, part: np.ndarray, expected: float, search=20.0) -> float:

@@ -1170,6 +1170,44 @@ def clip_text(jid: str, cid: str, body: dict = Body(...)):
     return jobs.public(job)
 
 
+@app.get("/api/jobs/{jid}/clips/{cid}/words")
+def clip_words(jid: str, cid: str):
+    """Return the transcript words for this clip to support word-level captions editing."""
+    job, clip = _clip_or_404(jid, cid)
+    if "words" in clip and isinstance(clip["words"], list):
+        return {"words": clip["words"]}
+    words_file = Path(job["dir"]) / "words.json"
+    if words_file.is_file():
+        try:
+            all_words = json.loads(words_file.read_text(encoding="utf-8"))
+            s, e = float(clip.get("start", 0)), float(clip.get("end", 0))
+            clip_words_list = [w for w in all_words if s - 0.5 <= float(w.get("s", 0)) <= e + 0.5]
+            return {"words": clip_words_list}
+        except Exception:
+            pass
+    return {"words": []}
+
+
+@app.put("/api/jobs/{jid}/clips/{cid}/rename")
+def rename_clip(jid: str, cid: str, body: dict = Body(...)):
+    """Rename a clip without re-rendering."""
+    job, clip = _clip_or_404(jid, cid)
+    new_title = str(body.get("title") or "").strip()[:100]
+    if new_title:
+        clip["title"] = new_title
+        jobs.save(job)
+        if job.get("dir"):
+            side = Path(job["dir"]) / "clips" / f"{cid}.json"
+            try:
+                if side.is_file():
+                    data = json.loads(side.read_text(encoding="utf-8"))
+                    data["title"] = new_title
+                    side.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+    return jobs.public(job)
+
+
 @app.post("/api/jobs/{jid}/clips/{cid}/write")
 def clip_write(jid: str, cid: str):
     """Ask the AI for a new title, description and hashtags for one clip. Returned to the page, not saved."""

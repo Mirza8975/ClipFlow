@@ -149,6 +149,8 @@ def _tidy(c, s, e, game=None):
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
         "reason": _text(c.get("reason"), 200),
+        "ai_detected": bool(c.get("ai_detected", False)),
+        "detection_source": str(c.get("detection_source") or ("cloud_ai" if c.get("ai_detected") else "offline")),
     }
 
 
@@ -279,7 +281,13 @@ def _snap(clip, lines, words, min_len, max_len, duration):
 
 
 def fallback_by_loudness(db, words, n, max_len, duration):
-    """No AI available: take the loudest stretches that contain speech."""
+    """No cloud AI key configured: select loud stretches containing coherent speech."""
+    def _f_sec(val):
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
     z = loud_zscore(db)
     picks, order = [], np.argsort(-z)
     for sec in order:
@@ -287,11 +295,30 @@ def fallback_by_loudness(db, words, n, max_len, duration):
         e = min(duration, s + max_len)
         if any(not (e <= p["start"] or s >= p["end"]) for p in picks):
             continue
-        if not any(s <= w["s"] <= e for w in words):
+        seg_words = []
+        if words:
+            for w in words:
+                if isinstance(w, dict):
+                    ws = _f_sec(w.get("s"))
+                    if ws is not None and s <= ws <= e:
+                        seg_words.append(w)
+        if words and not seg_words:
             continue
-        picks.append({"start": s, "end": e, "score": 50, "category": "other", "hook": "WAIT FOR IT",
-                      "title": "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
-                      "reason": "Picked by loudness because the AI was unavailable."})
+        if seg_words:
+            hook_text = " ".join(str(w.get("w") or "") for w in seg_words[:5]).strip().upper()
+            title_text = " ".join(str(w.get("w") or "") for w in seg_words[:8]).strip()
+            reason_text = "Identified via offline speech-density & loudness analysis (No cloud AI key configured)"
+            source = "offline_speech_loudness"
+            score = 65
+        else:
+            hook_text = "HIGHLIGHT MOMENT"
+            title_text = "Acoustic highlight"
+            reason_text = "Picked by loudness because the AI was unavailable."
+            source = "offline_loudness"
+            score = 50
+        picks.append({"start": s, "end": e, "score": score, "category": "other", "hook": hook_text or "HIGHLIGHT",
+                      "title": title_text or "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
+                      "reason": reason_text, "ai_detected": False, "detection_source": source})
         if len(picks) >= n:
             break
     return picks
@@ -329,13 +356,14 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
         try:
             out, used_model, spent = ask_ai(prompt, purpose="Video: finding clips")
             tokens += spent
-            found += [c for c in out if isinstance(c, dict) and a - 5 <= float(c.get("start", -1)) < b]
+            found += [dict(c, ai_detected=True, detection_source="cloud_ai")
+                      for c in out if isinstance(c, dict) and a - 5 <= float(c.get("start", -1)) < b]
         except Exception as e:  # noqa: BLE001
             log(f"AI window {a:.0f}-{b:.0f}s failed: {e}")
     note = ""
     if not used_model:
         found = fallback_by_loudness(db, words, max_clips, max_len, duration)
-        note = "The AI was unavailable, so clips were picked by loudness only."
+        note = "Clips were picked using offline speech and loudness analysis. Add a cloud AI key in Settings to enable deep semantic AI highlights."
     clips = []
     for c in sorted(found, key=lambda c: -_num(c.get("score"))):
         s, e = _snap(c, lines, words, min_len, max_len, duration)
