@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.URLUtil
@@ -51,6 +52,55 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ClipFlowMainActivity"
+        private val SAFE_IMAGE_DATA_URI_REGEX = Regex(
+            "^data:image/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=\\r\\n]+$",
+            RegexOption.IGNORE_CASE
+        )
+
+        /**
+         * Validates subresource URIs for WebView's shouldInterceptRequest security boundary:
+         * - Allows HTTP/HTTPS requests cleanly (HTTPS & mixed-content rules enforced separately).
+         * - Allows strict same-origin blob: subresources (e.g., URL.createObjectURL(file) video previews).
+         * - Allows strict base64 raster image data: subresources (never HTML/SVG/scripts).
+         * - Strictly blocks content://, file://, javascript:, cross-origin blob:, and all unknown schemes.
+         */
+        internal fun isAllowedSubresourceUri(
+            uri: Uri?,
+            trustedOriginUri: Uri?,
+            isForMainFrame: Boolean
+        ): Boolean {
+            if (uri == null) return false
+            val scheme = uri.scheme?.lowercase() ?: return false
+
+            if (scheme == "http" || scheme == "https") {
+                return true
+            }
+
+            if (isForMainFrame) {
+                return false
+            }
+
+            if (scheme == "blob") {
+                val innerRaw = uri.schemeSpecificPart?.trim() ?: return false
+                if (!innerRaw.startsWith("http://", ignoreCase = true) &&
+                    !innerRaw.startsWith("https://", ignoreCase = true)
+                ) {
+                    return false
+                }
+                val innerUri = try {
+                    Uri.parse(innerRaw)
+                } catch (_: Exception) {
+                    return false
+                }
+                return ServerConfigHelper.isSameOrigin(innerUri, trustedOriginUri)
+            }
+
+            if (scheme == "data") {
+                return SAFE_IMAGE_DATA_URI_REGEX.matches(uri.toString())
+            }
+
+            return false
+        }
     }
 
     private lateinit var webView: WebView
@@ -94,7 +144,17 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         if (fileUploadCallback == null) return@registerForActivityResult
 
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        val data = result.data
+        val clipData = data?.clipData
+        val uris: Array<Uri>? = if (result.resultCode == RESULT_OK && clipData != null && clipData.itemCount > 0) {
+            (0 until clipData.itemCount)
+                .mapNotNull { i -> clipData.getItemAt(i)?.uri }
+                .takeIf { it.isNotEmpty() }
+                ?.toTypedArray()
+                ?: WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        } else {
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        }
         fileUploadCallback?.onReceiveValue(uris)
         fileUploadCallback = null
     }
@@ -155,9 +215,15 @@ class MainActivity : AppCompatActivity() {
         val host = uri.host ?: ""
         val path = uri.path ?: ""
         val query = uri.query
-        val savedBase = serverHelper.getSavedServerUrl() ?: return
+        val savedBase = serverHelper.getSavedServerUrl()?.trim()?.removeSuffix("/") ?: "http://127.0.0.1:8765"
         val targetPath = if (host.isNotEmpty()) "/$host$path" else path
         val fullUrl = "$savedBase$targetPath" + (if (!query.isNullOrEmpty()) "?$query" else "")
+        val isLocal = savedBase.contains("127.0.0.1") || savedBase.contains("localhost")
+
+        if (isLocal && !ClipFlowBackendService.isServerRunning) {
+            startEngineAndConnect(savedBase, loadUrlOverride = fullUrl)
+            return
+        }
 
         layoutServerConfig.visibility = View.GONE
         layoutError.visibility = View.GONE
@@ -241,18 +307,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         fabSettings.setOnClickListener {
-            // Tapping Settings navigates the WebView to the real Settings page
+            // Close any open modal dialog first, then navigate the WebView to Settings
             webView.evaluateJavascript(
                 "(function() { " +
+                "  var dlg = document.querySelector('dialog[open]'); if (dlg && dlg.close) dlg.close(); " +
                 "  var b = document.querySelector('[data-act=\"go\"][data-v=\"settings\"]'); " +
-                "  if (b) { b.click(); } else if (window.S) { window.S.view = 'settings'; if (typeof draw === 'function') draw(); } " +
+                "  if (b) { b.click(); } else if (typeof go === 'function') { go('settings'); } else { window.location.href = '/app/settings'; } " +
                 "})();",
                 null
             )
         }
     }
 
-    private fun startEngineAndConnect(targetUrl: String = "http://127.0.0.1:8765", isRestart: Boolean = false) {
+    private fun startEngineAndConnect(
+        targetUrl: String = "http://127.0.0.1:8765",
+        isRestart: Boolean = false,
+        loadUrlOverride: String? = null
+    ) {
         showLoadingScreen()
         if (!isRestart) {
             ClipFlowBackendService.startService(this)
@@ -299,7 +370,7 @@ class MainActivity : AppCompatActivity() {
             if (connected) {
                 hideLoadingScreen()
                 serverHelper.saveServerUrl(targetUrl)
-                connectToServer(targetUrl)
+                connectToServer(targetUrl, loadUrlOverride)
             } else {
                 hideLoadingScreen()
                 val lastErr = ClipFlowBackendService.lastErrorMessage
@@ -386,9 +457,9 @@ class MainActivity : AppCompatActivity() {
         tvDiagnosticsLog?.text = diag
     }
 
-    private fun connectToServer(baseUrl: String) {
+    private fun connectToServer(baseUrl: String, loadUrlOverride: String? = null) {
         val cleanBase = baseUrl.trim().removeSuffix("/")
-        val targetAppUrl = "$cleanBase/app"
+        val targetAppUrl = loadUrlOverride?.takeIf { it.isNotEmpty() } ?: "$cleanBase/app"
         currentLoadedUrl = targetAppUrl
 
         Log.i(TAG, "[WEBVIEW_CONNECTED] Connecting WebView to $targetAppUrl")
@@ -450,7 +521,16 @@ class MainActivity : AppCompatActivity() {
                 val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                     type = "video/*"
                     addCategory(Intent.CATEGORY_OPENABLE)
-                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/mp4", "video/quicktime", "video/x-matroska", "video/webm"))
+                    putExtra(
+                        Intent.EXTRA_MIME_TYPES,
+                        arrayOf(
+                            "video/mp4", "video/quicktime", "video/x-matroska", "video/webm",
+                            "video/x-m4v", "video/mp2t", "video/x-flv", "video/3gpp", "video/x-msvideo"
+                        )
+                    )
+                    if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
                 }
 
                 try {
@@ -493,10 +573,12 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 val uri = request?.url ?: return null
-                val scheme = uri.scheme?.lowercase() ?: ""
+                val trustedOriginUri = serverHelper.getSavedServerUri()
+                    ?: currentLoadedUrl.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
 
-                // Strictly block any subresource attempting to load dangerous schemes (file:, content:, data:, etc.)
-                if (scheme != "http" && scheme != "https") {
+                // Allow http/https, strictly verified same-origin blob: media previews, and safe raster data:image/* thumbnails;
+                // block content://, file://, javascript:, cross-origin blob:, HTML/SVG data:, and unknown schemes.
+                if (!isAllowedSubresourceUri(uri, trustedOriginUri, request.isForMainFrame)) {
                     return WebResourceResponse(
                         "text/plain",
                         "UTF-8",
@@ -514,6 +596,7 @@ class MainActivity : AppCompatActivity() {
                 val targetUri = request?.url ?: return false
                 val scheme = targetUri.scheme?.lowercase() ?: ""
                 val trustedUri = serverHelper.getSavedServerUri()
+                    ?: currentLoadedUrl.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
 
                 // 1. Handle custom scheme clipflow://
                 if (scheme == "clipflow") {
@@ -739,5 +822,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    override fun onDestroy() {
+        fileUploadCallback?.onReceiveValue(null)
+        fileUploadCallback = null
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView.destroy()
+        }
+        super.onDestroy()
     }
 }

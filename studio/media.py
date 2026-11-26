@@ -374,6 +374,17 @@ def _is_range_fallback_eligible(e: Exception) -> bool:
     return any(r in msg for r in recoverable)
 
 
+def _fast_vcodec_args() -> list:
+    encs = _tools.get_video_encoders()
+    if not encs or "libx264" in encs:
+        return ["-c:v", "libx264", "-preset", "veryfast"]
+    if "h264_mediacodec" in encs:
+        return ["-c:v", "h264_mediacodec", "-b:v", "4000k"]
+    if "mpeg4" in encs:
+        return ["-c:v", "mpeg4", "-q:v", "3"]
+    return ["-c:v", "libx264", "-preset", "veryfast"]
+
+
 def download_section(url: str, out_dir: Path, stem: str, start: float, end: float, height=720, exact=False) -> Path:
     """Just one stretch of the video. The cut lands on a keyframe, so find_offset() pins the true start; with
     exact=True the cut is made at exactly `start` instead (slower), for when there is nothing to match against."""
@@ -410,7 +421,7 @@ def download_section(url: str, out_dir: Path, stem: str, start: float, end: floa
             full_src = download(url, out_dir, height=height)
             if exact:
                 cut_args = ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
-                            "-i", str(full_src), "-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast", str(target)]
+                            "-i", str(full_src)] + _fast_vcodec_args() + ["-c:a", "aac", str(target)]
                 run(cut_args)
             else:
                 cut_args = ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
@@ -419,7 +430,7 @@ def download_section(url: str, out_dir: Path, stem: str, start: float, end: floa
                     run(cut_args)
                 except Exception:
                     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, start):.2f}", "-t", f"{dur:.2f}",
-                         "-i", str(full_src), "-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast", str(target)])
+                         "-i", str(full_src)] + _fast_vcodec_args() + ["-c:a", "aac", str(target)])
             if target.is_file() and target.stat().st_size > 0:
                 return target
             raise RuntimeError(f"FFmpeg failed to produce {target.name}")
@@ -445,21 +456,60 @@ def find_offset(full: np.ndarray, part: np.ndarray, expected: float, search=20.0
     return (a0 + int(np.argmax(corr))) / 16000
 
 
+def _probe_with_ffmpeg(path: Path) -> dict:
+    """Fallback metadata probe using ffmpeg -i when ffprobe is unavailable."""
+    cmd = _tools.cmd(["ffmpeg", "-i", str(path)])
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=NO_WINDOW, timeout=60)
+    txt = (p.stderr or "") + "\n" + (p.stdout or "")
+    v_m = re.search(r"Stream\s+#\d+:\d+[^\n]*Video:[^\n]*?,\s*(\d{2,5})x(\d{2,5})(?=\s|\[|,|$)", txt)
+    if not v_m:
+        raise RuntimeError("This file has no video track.")
+    if not re.search(r"Stream\s+#\d+:\d+[^\n]*Audio:", txt):
+        raise RuntimeError("This file has no audio track, so there is nothing to transcribe.")
+    w, h = int(v_m.group(1)), int(v_m.group(2))
+    if w * h > 3840 * 2160 or w < 16 or h < 16:
+        raise RuntimeError("This video's resolution isn't supported (4K is the largest).")
+    rot_m = re.search(r"(?:displaymatrix:\s*rotation\s+of\s+|rotate\s*:\s*)(-?\d+(?:\.\d+)?)", txt, re.I)
+    if rot_m:
+        angle = int(round(float(rot_m.group(1)))) % 360
+        if angle in (90, 270):
+            w, h = h, w
+    dur_m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", txt)
+    if not dur_m:
+        raise RuntimeError("Could not determine video duration from media metadata.")
+    dur = int(dur_m.group(1)) * 3600 + int(dur_m.group(2)) * 60 + float(dur_m.group(3))
+    return {"width": w, "height": h, "duration": dur}
+
+
 def probe(path: Path) -> dict:
-    out = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)])
-    data = json.loads(out)
-    v = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
+    ffprobe_ok = _tools.is_available("ffprobe")
+    if ffprobe_ok:
+        try:
+            out = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)])
+            data = json.loads(out)
+        except OSError:
+            return _probe_with_ffmpeg(path)
+    else:
+        return _probe_with_ffmpeg(path)
+    v = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
     if not v:
         raise RuntimeError("This file has no video track.")
-    if not any(s["codec_type"] == "audio" for s in data["streams"]):
+    if not any(s.get("codec_type") == "audio" for s in data.get("streams", [])):
         raise RuntimeError("This file has no audio track, so there is nothing to transcribe.")
     w, h = int(v["width"]), int(v["height"])
     if w * h > 3840 * 2160 or w < 16 or h < 16:
         raise RuntimeError("This video's resolution isn't supported (4K is the largest).")
-    rot = str((v.get("side_data_list") or [{}])[0].get("rotation", "0"))
+    sd = ((v.get("side_data_list") or [{}])[0] or {})
+    rot = str(sd.get("rotation", "0"))
     if rot.lstrip("-") in ("90", "270"):
         w, h = h, w
-    return {"width": w, "height": h, "duration": float(data["format"]["duration"])}
+    raw_dur = (data.get("format") or {}).get("duration")
+    if raw_dur in (None, "", "N/A"):
+        raw_dur = next((s.get("duration") for s in data.get("streams", []) if s.get("duration") not in (None, "", "N/A")), None)
+    if raw_dur in (None, "", "N/A"):
+        return _probe_with_ffmpeg(path)
+    return {"width": w, "height": h, "duration": float(raw_dur)}
 
 
 def extract_audio(src: Path, wav: Path):

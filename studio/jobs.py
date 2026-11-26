@@ -414,18 +414,36 @@ def request_render(jid, cid, changes: dict):
     if "muted" in changes:
         new["muted"] = bool(changes["muted"])
     if "facecam" in changes and isinstance(changes["facecam"], (list, tuple)):
-        new["facecam"] = [int(v) for v in changes["facecam"][:6]]
+        fc_vals = []
+        for v in changes["facecam"][:6]:
+            fv = float(v)
+            if not math.isfinite(fv):
+                raise ValueError("Invalid facecam coordinates.")
+            fc_vals.append(int(round(fv)))
+        if len(fc_vals) >= 4:
+            new["facecam"] = fc_vals
     if "words" in changes and isinstance(changes["words"], list):
-        new["words"] = changes["words"]
+        clean_words = []
+        for w in changes["words"]:
+            if not isinstance(w, dict) or w.get("w") is None:
+                continue
+            try:
+                ws, we = float(w.get("s", 0.0)), float(w.get("e", 0.0))
+            except (ValueError, TypeError):
+                continue
+            if not (math.isfinite(ws) and math.isfinite(we)):
+                continue
+            clean_words.append({"w": str(w["w"]), "s": round(max(0.0, ws), 2), "e": round(max(0.0, we), 2)})
+        new["words"] = clean_words
         new["custom_words"] = True
         clip.pop("fixed_words", None)
         clip.pop("fixed_for", None)
         new.pop("fixed_words", None)
         new.pop("fixed_for", None)
     if "text_overlays" in changes and isinstance(changes["text_overlays"], list):
-        new["text_overlays"] = changes["text_overlays"]
+        new["text_overlays"] = [dict(t) for t in changes["text_overlays"][:30] if isinstance(t, dict)]
     if "stickers" in changes and isinstance(changes["stickers"], list):
-        new["stickers"] = changes["stickers"]
+        new["stickers"] = [dict(s) for s in changes["stickers"][:30] if isinstance(s, dict)]
     clip.update(new, status="queued")
     save(job)
     _q.put(("clip", jid, cid))
@@ -493,7 +511,7 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
-        words_to_use = clip.get("words") if (clip.get("words") and isinstance(clip.get("words"), list)) else words
+        words_to_use = clip["words"] if (clip.get("custom_words") and isinstance(clip.get("words"), list)) or (isinstance(clip.get("words"), list) and clip["words"]) else words
         near = _caption_words(job, clip, words_to_use, off) if clip.get("captions", True) else []
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
@@ -522,7 +540,7 @@ def _caption_words(job, clip, words, off):
             return fallback
 
     if clip.get("custom_words") or ("words" in clip and isinstance(clip["words"], list) and clip["words"]):
-        raw_words = clip.get("words") or words
+        raw_words = clip["words"] if ("words" in clip and isinstance(clip["words"], list)) else words
         raw = [w for w in raw_words if isinstance(w, dict) and clip["start"] - 0.5 <= _f(w.get("s")) <= clip["end"] + 0.5]
         return [dict(w, s=_f(w.get("s")) - off, e=_f(w.get("e")) - off) for w in roman.words(raw)]
 

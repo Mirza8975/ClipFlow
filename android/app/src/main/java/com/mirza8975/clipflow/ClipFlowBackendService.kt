@@ -294,10 +294,16 @@ class ClipFlowBackendService : Service() {
 
     private fun extractWebAssetsIfNeeded(destDir: File) {
         val versionFile = File(destDir, ".version")
-        val currentCode = BuildConfig.VERSION_CODE.toString()
+        val lastUpdateTime = try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        } catch (_: Exception) {
+            0L
+        }
+        val currentStamp = "${BuildConfig.VERSION_CODE}:$lastUpdateTime"
         val indexHtml = File(destDir, "index.html")
 
-        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentCode && indexHtml.exists() && indexHtml.length() > 0) {
+        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentStamp && indexHtml.exists() && indexHtml.length() > 0) {
             return // Up to date
         }
 
@@ -307,7 +313,7 @@ class ClipFlowBackendService : Service() {
 
         copyAssetFolder("web", destDir)
         try {
-            versionFile.writeText(currentCode)
+            versionFile.writeText(currentStamp)
         } catch (e: IOException) {
             Log.w(TAG, "Failed to write web assets version file", e)
         }

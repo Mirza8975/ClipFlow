@@ -93,7 +93,10 @@ def _startup():
         if uploads.is_dir():
             for f in uploads.glob("*"):      # uploads cut short by a restart
                 try:
-                    f.unlink()
+                    if f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+                    else:
+                        f.unlink()
                 except OSError:
                     pass
     except Exception as e:
@@ -1538,8 +1541,11 @@ def ai_usage():
 
 # ---------------------------------------------------------------- the AI key and model, set from the dashboard
 # Only the owner (or an admin, when accounts are on) reaches these. The key is never sent back to the page.
-def _ai_error(e) -> str:
-    return safe.friendly(e, 300).replace(ai.key() or "\0", "<key>")
+def _ai_error(e, extra_key: str = None) -> str:
+    msg = safe.friendly(e, 300).replace(ai.key() or "\0", "<key>")
+    if extra_key:
+        msg = msg.replace(extra_key, "<key>")
+    return msg
 
 
 @app.get("/api/ai")
@@ -1566,26 +1572,36 @@ def ai_put(request: Request, body: dict = Body(...)):
 def ai_models(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aimodels:" + ctx.uid(), 30, 600)
+    provider_id = (body.get("provider") or "").strip() or None
+    base_url = (body.get("base_url") or "").strip() or None
+    key_val = (body.get("key") or "").strip() or None
     try:
-        return {"models": ai.list_models(body.get("provider"), body.get("base_url"), body.get("key"))}
+        return {"models": ai.list_models(provider_id, base_url, key_val)}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
-        reason = ai.explain(e)
+        reason = ai.explain(e, provider_id=provider_id)
         raise HTTPException(502, f"The service did not give its list of models. {reason}" if reason else
-                            "The service did not give its list of models. Check the key, or type the model yourself. " + _ai_error(e)[:160])
+                            "The service did not give its list of models. Check the key, or type the model yourself. " + _ai_error(e, key_val)[:160])
 
 
 @app.post("/api/ai/test")
-def ai_test(request: Request):
+def ai_test(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aitest:" + ctx.uid(), 20, 600)
+    raw_model = body.get("model") or body.get("models")
+    model = ", ".join(ai.parse_models(raw_model)) if isinstance(raw_model, (list, tuple)) else str(raw_model or "").strip()
+    provider_id = (body.get("provider") or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    key_val = (body.get("key") or "").strip()
     try:
-        return ai.test()
+        return ai.test(model=model or None, provider_id=provider_id or None,
+                       address=base_url or None, key_val=key_val or None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, ai.explain(e) or "The AI did not answer: " + _ai_error(e))
+        reason = ai.explain(e, model=model or None, provider_id=provider_id or None)
+        raise HTTPException(502, reason or "The AI did not answer: " + _ai_error(e, key_val))
 
 
 # ---------------------------------------------------------------- speech models, one per spoken language

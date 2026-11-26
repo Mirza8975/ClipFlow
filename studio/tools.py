@@ -8,6 +8,7 @@ Platform-aware discovery and execution adapter:
 - Performs live capability verification before marking tools available.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,8 @@ NEEDED = ("ffmpeg", "ffprobe")
 _seen = {"at": 0.0, "missing": list(NEEDED)}
 _BINARIES: dict[str, str] = {}
 _CAPABILITY: dict[str, dict] = {}
+_SUPPORTED_ENCODERS: set[str] | None = None
+_SUPPORTED_FILTERS: set[str] | None = None
 
 
 def is_android() -> bool:
@@ -281,6 +284,130 @@ def get_js_runtime() -> dict | None:
     return None
 
 
+def get_video_encoders(ffmpeg_bin: str = None) -> set[str]:
+    """Return a set of video encoder names supported by the resolved or provided FFmpeg binary."""
+    global _SUPPORTED_ENCODERS
+    if _SUPPORTED_ENCODERS is not None and not ffmpeg_bin:
+        return set(_SUPPORTED_ENCODERS)
+
+    exe = ffmpeg_bin or get_ffmpeg()
+    encoders = set()
+    try:
+        proc = subprocess.run([exe, "-encoders"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=5.0)
+        if proc.returncode == 0:
+            text = proc.stdout.decode("utf-8", errors="replace")
+            for line in text.splitlines():
+                # Format: " V..... <name> ..."
+                m = re.match(r"^\s*V[F.][S.][X.][B.][D.]\s+(\S+)", line)
+                if m:
+                    encoders.add(m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    if not ffmpeg_bin:
+        _SUPPORTED_ENCODERS = encoders
+    return set(encoders)
+
+
+def get_render_encoder_candidates(crf_val: int | str = 21, preset_val: str = "veryfast", ffmpeg_bin: str = None) -> list[tuple[str, list[str]]]:
+    """Return ordered list of (label, ffmpeg_args) for video encoding, tailored to available encoders.
+    Preserves user quality settings (CRF mapped accurately to bitrate or q:v scale)."""
+    try:
+        crf_int = int(crf_val)
+    except (ValueError, TypeError):
+        crf_int = 21
+
+    encoders = get_video_encoders(ffmpeg_bin)
+    candidates = []
+
+    # 1. Intel QuickSync (Desktop hardware acceleration)
+    if not encoders or "h264_qsv" in encoders:
+        candidates.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", str(crf_int), "-preset", "fast"]))
+
+    # 2. libx264 (Desktop high-quality software encoder)
+    if not encoders or "libx264" in encoders:
+        candidates.append(("x264", ["yuv420p", "-c:v", "libx264", "-crf", str(crf_int), "-preset", str(preset_val)]))
+
+    # 3. Android MediaCodec (Android hardware encoder)
+    # Map CRF 21 -> 4500k; CRF 18 -> 6363k; CRF 24 -> 3181k; CRF 28 -> 1988k
+    bitrate_k = max(1000, min(12000, int(4500 * (2 ** ((21 - crf_int) / 6.0)))))
+    if not encoders or "h264_mediacodec" in encoders:
+        candidates.append(("mediacodec", ["yuv420p", "-c:v", "h264_mediacodec", "-b:v", f"{bitrate_k}k"]))
+
+    # 4. Universal native mpeg4 (LGPL software encoder, built-in everywhere)
+    # Map CRF (16-28) to MPEG-4 q:v scale (2-8)
+    q_val = max(2, min(8, int(round((crf_int - 12) / 3.0))))
+    if not encoders or "mpeg4" in encoders:
+        candidates.append(("mpeg4", ["yuv420p", "-c:v", "mpeg4", "-q:v", str(q_val)]))
+
+    return candidates
+
+
+def get_supported_filters(ffmpeg_bin: str = None) -> set[str]:
+    """Return a set of filter names supported by the resolved or provided FFmpeg binary."""
+    global _SUPPORTED_FILTERS
+    if _SUPPORTED_FILTERS is not None and not ffmpeg_bin:
+        return set(_SUPPORTED_FILTERS)
+
+    exe = ffmpeg_bin or get_ffmpeg()
+    filters = set()
+    try:
+        proc = subprocess.run([exe, "-filters"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=5.0)
+        if proc.returncode == 0:
+            text = proc.stdout.decode("utf-8", errors="replace")
+            for line in text.splitlines():
+                m = re.match(r"^\s*[TSC.|]{2,4}\s+(\w+)\s+", line)
+                if m:
+                    filters.add(m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    if not ffmpeg_bin:
+        _SUPPORTED_FILTERS = filters
+    return set(filters)
+
+
+def has_filter(filter_name: str, ffmpeg_bin: str = None) -> bool:
+    """Check if the resolved or provided FFmpeg binary supports the specified filter."""
+    filters = get_supported_filters(ffmpeg_bin)
+    if not filters:
+        return True
+    return filter_name in filters
+
+
+def has_ass_filter(ffmpeg_bin: str = None) -> bool:
+    """Check if the FFmpeg binary supports the 'ass' filter for burned-in subtitles."""
+    return has_filter("ass", ffmpeg_bin)
+
+
+def get_best_blur_filter(ffmpeg_bin: str = None) -> str:
+    """Return the best supported blur filter command for background fill.
+    Prefers 'boxblur=6:2' on desktop, falls back to 'avgblur=sizeX=6:sizeY=6' or 'gblur=sigma=6' on Android."""
+    filters = get_supported_filters(ffmpeg_bin)
+    if not filters or "boxblur" in filters:
+        return "boxblur=6:2"
+    if "avgblur" in filters:
+        return "avgblur=sizeX=6:sizeY=6"
+    if "gblur" in filters:
+        return "gblur=sigma=6"
+    return ""
+
+
+def get_bg_dim_filter(ffmpeg_bin: str = None) -> str:
+    """Return the background dim/saturate filter string supported by FFmpeg.
+    Uses 'eq=brightness=-0.14:saturation=1.15' on desktop, falls back to colorlevels and huesaturation on Android."""
+    filters = get_supported_filters(ffmpeg_bin)
+    if not filters or "eq" in filters:
+        return "eq=brightness=-0.14:saturation=1.15"
+    if "colorlevels" in filters and "huesaturation" in filters:
+        return "colorlevels=rimax=0.86:gimax=0.86:bimax=0.86,huesaturation=saturation=0.15"
+    if "colorlevels" in filters:
+        return "colorlevels=rimax=0.86:gimax=0.86:bimax=0.86"
+    return ""
+
+
 def get_diagnostics() -> dict:
     """Return structured capability and path diagnostics for FFmpeg, FFprobe and JS runtimes."""
     if not _BINARIES:
@@ -290,6 +417,8 @@ def get_diagnostics() -> dict:
         "missing": list(_seen["missing"]),
         "help": get_help(),
         "capabilities": dict(_CAPABILITY),
+        "encoders": sorted(list(get_video_encoders())),
+        "filters": sorted(list(get_supported_filters())),
         "binaries": dict(_BINARIES),
         "js_runtime": get_js_runtime(),
         "env": {

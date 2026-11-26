@@ -90,11 +90,30 @@ def install_fonts():
         print(f"[ClipFlow] Font installation notice: {e}", flush=True)
 
 
-LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)",
-           "left": "Fill the screen, keep the left side", "right": "Fill the screen, keep the right side",
-           "fit": "Full frame on black", "split": "Split screen: left half on top, right half below (two people)",
-           "gameplay": "Gameplay fills the screen, facecam in the corner",
-           "pip": "Picture-in-picture with facecam"}
+LAYOUTS = {
+    "blur": "Full frame + blurred fill (9:16)",
+    "crop": "Fill the screen (centre crop 9:16)",
+    "landscape": "Horizontal full frame (16:9)",
+    "square": "Square video (1:1)",
+    "split": "Split screen: top & bottom (two people)",
+    "pip": "Picture-in-picture with facecam",
+    "gameplay": "Gameplay fills the screen, facecam in the corner",
+    "fit": "Full frame on black",
+    "zoom": "Zoomed in + blurred fill",
+    "left": "Fill the screen, keep the left side",
+    "right": "Fill the screen, keep the right side",
+}
+
+
+def get_dimensions(layout: str) -> tuple[int, int]:
+    """Return (width, height) for the target video layout."""
+    if layout == "landscape":
+        return 1920, 1080
+    if layout == "square":
+        return 1080, 1080
+    return getattr(config, "OUT_W", 1080), getattr(config, "OUT_H", 1920)
+
+
 SAFE_MARGINS = {"reels": "Instagram Reels (9:16 safe)", "tiktok": "TikTok (9:16 safe)", "shorts": "YouTube Shorts", "none": "Full Frame (No Margin)"}
 FILTERS = {
     "normal": "",
@@ -106,7 +125,7 @@ FILTERS = {
     "warm": "colorbalance=rs=.12:gs=.06:bs=-.1",
     "cool": "colorbalance=rs=-.1:gs=.0:bs=.15",
 }
-_FILLS = ("crop", "left", "right", "gameplay", "pip")      # layouts where the picture covers the whole frame
+_FILLS = ("crop", "left", "right", "gameplay", "pip", "landscape", "square")      # layouts where the picture covers the whole frame
 
 
 def _ts(t):
@@ -137,18 +156,25 @@ def _groups(words, per):
 
 
 def geometry(src_w, src_h, layout, safe_margin=None):
-    """Where the video sits in the vertical frame, and where hook and captions go, respecting social safe zones."""
-    if src_h >= src_w and layout != "crop":
-        layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
+    """Where the video sits in the frame, and where hook and captions go, respecting social safe zones."""
     if layout not in LAYOUTS:
         layout = "blur"
+
+    cur_w, cur_h = get_dimensions(layout)
+    if layout == "landscape":
+        fg_h = cur_h
+        return layout, fg_h, 120, cur_h - 140
+    if layout == "square":
+        fg_h = cur_h
+        return layout, fg_h, 140, cur_h - 160
+
     if layout in ("blur", "fit"):
-        fg_h = min(H, int(round(W * src_h / src_w / 2)) * 2)
+        fg_h = min(cur_h, max(2, int(round(cur_w * src_h / src_w / 2)) * 2))
     elif layout == "zoom":
         fg_h = 1000
     else:
-        fg_h = H
-    top = (H - fg_h) // 2
+        fg_h = cur_h
+    top = (cur_h - fg_h) // 2
 
     # Social safe margins (Instagram Reels, TikTok, YouTube Shorts)
     mode = str(safe_margin or getattr(config, "SAFE_MARGIN_MODE", "reels")).lower()
@@ -164,12 +190,13 @@ def geometry(src_w, src_h, layout, safe_margin=None):
     if layout in _FILLS:
         return layout, fg_h, safe_top + 30, safe_bottom
     if layout == "split":
-        return layout, fg_h, safe_top, H // 2        # captions sit on the line between the two people
+        return layout, fg_h, safe_top, cur_h // 2        # captions sit on the line between the two people
     return layout, fg_h, max(safe_top, top - 190), min(safe_bottom, top + fg_h + 180)
 
 
-def _hook_events(hook, dur, y):
+def _hook_events(hook, dur, y, out_w=None, out_h=None):
     """The heading: dark text in a white rounded box that fits it, on one line or two balanced ones."""
+    cur_w = out_w or W
     f, size = _Font.get(HOOK["font"]), HOOK["size"]
     words = hook.split()
     if not words:
@@ -184,7 +211,7 @@ def _hook_events(hook, dur, y):
         widest = max(f.width(l, size) for l in lines)
     line_h = f.em(size) * 1.16
     bw, bh = widest + 2 * HOOK["pad_x"], line_h * len(lines) + 2 * HOOK["pad_y"]
-    x0, y0, r = (W - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
+    x0, y0, r = (cur_w - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
     x1, y1 = x0 + bw, y0 + bh
     n = lambda v: f"{v:.0f}"                                                         # noqa: E731
     box = (f"m {n(x0 + r)} {n(y0)} l {n(x1 - r)} {n(y0)} b {n(x1)} {n(y0)} {n(x1)} {n(y0)} {n(x1)} {n(y0 + r)} "
@@ -195,18 +222,21 @@ def _hook_events(hook, dur, y):
     ev = [f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\fad(160,0)\\c&H{HOOK['box']}&\\p1}}{box}{{\\p0}}"]
     for i, line in enumerate(lines):
         cy = y - line_h * (len(lines) - 1) / 2 + i * line_h - f.cap_shift(size)
-        ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({W // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
+        ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({cur_w // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, text_overlays=None, stickers=None) -> str:
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, text_overlays=None, stickers=None, out_w=None, out_h=None) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
+    cur_w = out_w or W
+    cur_h = out_h or H
+    cap_max_w = int(cur_w * 0.82)
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
     head = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
+PlayResX: {cur_w}
+PlayResY: {cur_h}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
@@ -219,7 +249,7 @@ Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
-    ev = _hook_events(_clean(hook), dur, hook_y)
+    ev = _hook_events(_clean(hook), dur, hook_y, out_w=cur_w, out_h=cur_h)
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -240,17 +270,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # they are not placed one by one. The line is drawn whole and centred, in a font the system has for it.
             line = " ".join(texts)
             fs = max(44, min(int(st["size"] * 0.7), int(1500 / max(1, len(line)) * 1.6)))
-            ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({W // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
+            ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({cur_w // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
             continue
         size = st["size"]
         gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
         total = sum(f.width(t, size) for t in texts) + gap * (len(texts) - 1)
-        if total > CAP_MAX_W:                                  # a long phrase: shrink it to fit, never run off the frame
-            size = max(36, int(size * CAP_MAX_W / total))
+        if total > cap_max_w:                                  # a long phrase: shrink it to fit, never run off the frame
+            size = max(36, int(size * cap_max_w / total))
             gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
             total = sum(f.width(t, size) for t in texts) + gap * (len(texts) - 1)
         cy = cap_y - f.cap_shift(size)
-        x = (W - total) / 2
+        x = (cur_w - total) / 2
         p = st["pop"]
         for i, (w, t) in enumerate(zip(g, texts)):
             wd = f.width(t, size)
@@ -294,8 +324,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         t_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
         if t_e <= t_s:
             t_e = dur
-        t_x = _parse_coord(item.get("x"), W)
-        t_y = _parse_coord(item.get("y"), H)
+        t_x = _parse_coord(item.get("x"), cur_w)
+        t_y = _parse_coord(item.get("y"), cur_h)
         raw_fs = item.get("font_size") if item.get("font_size") is not None else item.get("size", 72)
         try:
             fs_val = float(raw_fs)
@@ -322,8 +352,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         s_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
         if s_e <= s_s:
             s_e = dur
-        s_x = _parse_coord(item.get("x"), W)
-        s_y = _parse_coord(item.get("y"), H)
+        s_x = _parse_coord(item.get("x"), cur_w)
+        s_y = _parse_coord(item.get("y"), cur_h)
         scale = float(item.get("scale", 1.0))
         if item.get("size"):
             s_fs = max(32, int(item.get("size")))
@@ -340,7 +370,7 @@ PIP_W = 380            # how wide the facecam is in the 1080-wide frame
 PIP_MARGIN = 26
 
 
-def _normalize_facecam(facecam, src_w: int, src_h: int):
+def _normalize_facecam(facecam, src_w: int, src_h: int, out_w: int = None, out_h: int = None):
     """Converts percentage or pixel facecam coordinates to valid source-pixel crop parameters."""
     if not facecam or not isinstance(facecam, (list, tuple)) or len(facecam) < 4:
         return None
@@ -349,7 +379,12 @@ def _normalize_facecam(facecam, src_w: int, src_h: int):
     except (ValueError, TypeError):
         return None
 
-    if raw_fw <= 100 and raw_fh <= 100:
+    is_pct = (
+        0 <= raw_fx <= 100 and 0 <= raw_fy <= 100
+        and 0 < raw_fw <= 100 and 0 < raw_fh <= 100
+        and (raw_fx + raw_fw) <= 105 and (raw_fy + raw_fh) <= 105
+    )
+    if is_pct:
         fx = int(round(src_w * raw_fx / 100.0))
         fy = int(round(src_h * raw_fy / 100.0))
         fw = int(round(src_w * raw_fw / 100.0))
@@ -368,6 +403,7 @@ def _normalize_facecam(facecam, src_w: int, src_h: int):
     fx = max(0, min(src_w - fw, fx))
     fy = max(0, min(src_h - fh, fy))
 
+    cw, ch = out_w or W, out_h or H
     ox = 0
     oy = 0
     if len(facecam) >= 6:
@@ -375,11 +411,11 @@ def _normalize_facecam(facecam, src_w: int, src_h: int):
             raw_ox = float(facecam[4])
             raw_oy = float(facecam[5])
             if 0 < raw_ox <= 100:
-                ox = int(round(W * raw_ox / 100.0))
+                ox = int(round(cw * raw_ox / 100.0))
             else:
                 ox = int(round(raw_ox))
             if 0 < raw_oy <= 100:
-                oy = int(round(H * raw_oy / 100.0))
+                oy = int(round(ch * raw_oy / 100.0))
             else:
                 oy = int(round(raw_oy))
         except (ValueError, TypeError):
@@ -388,30 +424,68 @@ def _normalize_facecam(facecam, src_w: int, src_h: int):
     return [fx, fy, fw, fh, ox, oy]
 
 
-def _filter(layout, fg_h, facecam=None, video_filter=None):
-    vf = FILTERS.get(str(video_filter or "").lower(), "")
+def _resolve_video_filter(video_filter: str | None) -> str:
+    """Resolve preset filter string with non-GPL fallbacks when FFmpeg lacks 'eq'."""
+    name = str(video_filter or "").lower()
+    raw_vf = FILTERS.get(name, "")
+    if not raw_vf or "eq=" not in raw_vf or _tools.has_filter("eq"):
+        return raw_vf
+    has_cl = _tools.has_filter("colorlevels")
+    has_hs = _tools.has_filter("huesaturation")
+    has_hue = _tools.has_filter("hue")
+    if name == "dramatic":
+        parts = []
+        if has_cl:
+            parts.append("colorlevels=rimin=0.08:gimin=0.08:bimin=0.08:rimax=0.92:gimax=0.92:bimax=0.92")
+        if has_hs:
+            parts.append("huesaturation=saturation=-0.12")
+        return ",".join(parts)
+    if name == "cyber":
+        parts = []
+        if has_cl:
+            parts.append("colorlevels=rimin=0.04:gimin=0.04:bimin=0.04:rimax=0.96:gimax=0.96:bimax=0.96")
+        if has_hs:
+            parts.append("huesaturation=saturation=0.45")
+        if has_hue:
+            parts.append("hue=h=15")
+        return ",".join(parts)
+    if name == "vivid":
+        parts = []
+        if has_cl:
+            parts.append("colorlevels=rimin=0.05:gimin=0.05:bimin=0.05:rimax=0.95:gimax=0.95:bimax=0.95")
+        if has_hs:
+            parts.append("huesaturation=saturation=0.35")
+        return ",".join(parts)
+    return "huesaturation=saturation=0.25" if has_hs else ""
+
+
+def _filter(layout, fg_h, facecam=None, video_filter=None, out_w=None, out_h=None, blur_filter=None):
+    cur_w = out_w or (get_dimensions(layout)[0] if layout in LAYOUTS else W)
+    cur_h = out_h or (get_dimensions(layout)[1] if layout in LAYOUTS else H)
+    vf = _resolve_video_filter(video_filter)
     if layout in ("gameplay", "pip") and facecam:
         fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
         if fw > 8 and fh > 8:
             pip_h = max(2, int(round(PIP_W * fh / fw)))
-            ox = int(facecam[4]) if len(facecam) >= 6 and int(facecam[4]) > 0 else (W - PIP_W - PIP_MARGIN)
+            ox = int(facecam[4]) if len(facecam) >= 6 and int(facecam[4]) > 0 else (cur_w - PIP_W - PIP_MARGIN)
             oy = int(facecam[5]) if len(facecam) >= 6 and int(facecam[5]) > 0 else PIP_MARGIN
             base_chain = (f"[0:v]fps={config.OUT_FPS},split=2[base][fc];"
-                          f"[base]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[b];"
+                          f"[base]scale={cur_w}:{cur_h}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h},setsar=1[b];"
                           f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={PIP_W}:{pip_h},setsar=1[p];"
                           f"[b][p]overlay={ox}:{oy}[v_raw];")
             return base_chain + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
-    fill = f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
-    if layout == "crop" or (layout in ("gameplay", "pip") and not facecam):
+    fill = f"[0:v]fps={config.OUT_FPS},scale={cur_w}:{cur_h}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h}"
+    if layout in ("crop", "landscape", "square") or (layout in ("gameplay", "pip") and not facecam):
         core = fill + ",setsar=1[v_raw];"
     elif layout == "left":
         core = fill + ":0:0,setsar=1[v_raw];"
     elif layout == "right":
         core = fill + ":in_w-out_w:0,setsar=1[v_raw];"
     elif layout == "fit":
-        core = f"[0:v]fps={config.OUT_FPS},scale={W}:{fg_h},pad={W}:{H}:0:(oh-ih)/2:black,setsar=1[v_raw];"
+        core = (f"[0:v]fps={config.OUT_FPS},scale={cur_w}:{cur_h}:force_original_aspect_ratio=decrease,"
+                f"pad={cur_w}:{cur_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[v_raw];")
     elif layout == "split":
-        half = f"scale={W}:{H // 2}:force_original_aspect_ratio=increase,crop={W}:{H // 2}"
+        half = f"scale={cur_w}:{cur_h // 2}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h // 2}"
         if facecam and len(facecam) >= 4 and int(facecam[2]) > 8 and int(facecam[3]) > 8:
             fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
             core = (f"[0:v]fps={config.OUT_FPS},split=2[fc][main];"
@@ -421,11 +495,15 @@ def _filter(layout, fg_h, facecam=None, video_filter=None):
             core = (f"[0:v]fps={config.OUT_FPS},split=2[l][r];[l]crop=iw/2:ih:0:0,{half}[t];"
                     f"[r]crop=iw/2:ih:iw/2:0,{half}[u];[t][u]vstack,setsar=1[v_raw];")
     else:
+        blur_cmd = blur_filter if blur_filter is not None else _tools.get_best_blur_filter()
+        blur_segment = f"{blur_cmd}," if blur_cmd else ""
+        dim_cmd = _tools.get_bg_dim_filter()
+        dim_segment = f",{dim_cmd}" if dim_cmd else ""
         core = (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
-                f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
-                f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
-                f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
-                f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v_raw];")
+                f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,{blur_segment}"
+                f"scale={cur_w}:{cur_h}{dim_segment}[bg];"
+                f"[b]scale={cur_w}:{fg_h}:force_original_aspect_ratio=increase,crop={cur_w}:{fg_h}[fg];"
+                f"[bg][fg]overlay=0:({cur_h}-h)/2,setsar=1[v_raw];")
     return core + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
 
 
@@ -437,6 +515,37 @@ def _hook_y(layout, hook_y, facecam=None):
     return hook_y
 
 
+def has_ass_events(ass_content: str) -> bool:
+    """Return True if the ASS script contains any Dialogue events."""
+    if not ass_content:
+        return False
+    return any(line.strip().startswith("Dialogue:") for line in ass_content.splitlines())
+
+
+def _ass_event_kinds(ass_content: str) -> list[str]:
+    """Identify which overlay element categories exist in an ASS script."""
+    if not ass_content:
+        return []
+    kinds = set()
+    for line in ass_content.splitlines():
+        s = line.strip()
+        if not s.startswith("Dialogue:"):
+            continue
+        parts = s.split(",", 4)
+        layer = parts[0].split(":", 1)[1].strip() if ":" in parts[0] else ""
+        style = parts[3].strip() if len(parts) > 3 else ""
+        if style == "Hook":
+            kinds.add("title hook")
+        elif layer == "5":
+            kinds.add("text overlays")
+        elif layer == "6":
+            kinds.add("stickers")
+        else:
+            kinds.add("captions")
+    order = ["captions", "title hook", "text overlays", "stickers"]
+    return [k for k in order if k in kinds]
+
+
 _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
 
@@ -446,9 +555,10 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), clip.get("safe_margin"))
-    face = _normalize_facecam(clip.get("facecam"), src_w, src_h)
-    if layout in ("gameplay", "pip") and not (face and len(face) >= 4):
-        layout = "crop"     # no webcam found: the game fills the screen, which is still the right shape
+    cur_w, cur_h = get_dimensions(layout)
+    face = _normalize_facecam(clip.get("facecam"), src_w, src_h, out_w=cur_w, out_h=cur_h)
+    if layout == "pip" and not (face and len(face) >= 4):
+        face = _normalize_facecam([10, 10, 40, 40, 0, 0], src_w, src_h, out_w=cur_w, out_h=cur_h)
     hook_y = _hook_y(layout, hook_y, face)
     text_overlays = clip.get("text_overlays") or []
     stickers = clip.get("stickers") or []
@@ -456,32 +566,49 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     vol = float(clip.get("volume", 1.0))
     muted = bool(clip.get("muted", False))
     ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y, text_overlays=text_overlays, stickers=stickers)
+                    clip.get("highlight_words", []), hook_y, cap_y, text_overlays=text_overlays, stickers=stickers,
+                    out_w=cur_w, out_h=cur_h)
+    captions_requested = has_ass_events(ass)
     # The clip is made in a short work folder and moved into place afterwards.
     work = Path(tempfile.mkdtemp(prefix="cf"))
     try:
         meta = {"title": clip.get("title") or "", "description": clip.get("description") or "", "comment": clip.get("description") or ""}
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, meta=meta,
-                          video_filter=v_filter, volume=vol, muted=muted)
+                          video_filter=v_filter, volume=vol, muted=muted, out_w=cur_w, out_h=cur_h,
+                          captions_requested=captions_requested)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, meta=None,
-               video_filter=None, volume=1.0, muted=False) -> dict:
+               video_filter=None, volume=1.0, muted=False, out_w=None, out_h=None, captions_requested: bool = True) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
-    (work / "f").mkdir()
+    (work / "f").mkdir(exist_ok=True)
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h, face, video_filter=video_filter) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    af_filters = []
+
+    ass_ok = _tools.has_ass_filter()
+    has_events = has_ass_events(ass)
+    if ass_ok and has_events:
+        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    elif not ass_ok and has_events:
+        kinds = _ass_event_kinds(ass)
+        items_str = ", ".join(kinds) if kinds else "captions, title hook, text overlays, or stickers"
+        raise RuntimeError(
+            "Render failed: Subtitle burning requires FFmpeg with 'ass' filter (libass) support. "
+            f"The bundled FFmpeg binary cannot render burned-in {items_str}. "
+            f"To export this video on Android, please turn off captions and remove any {items_str} in clip settings."
+        )
+    else:
+        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + "[v0]copy[v]"
+
     if muted or volume <= 0.001:
-        af_filters.append("volume=0")
+        af_chain = "volume=0"
     elif abs(volume - 1.0) > 0.01:
-        af_filters.append(f"volume={volume:.2f}")
-    af_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
-    af_chain = ",".join(af_filters)
+        af_chain = f"loudnorm=I=-14:TP=-1.5:LRA=11,volume={volume:.2f}"
+    else:
+        af_chain = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
     base = [_tools.get_ffmpeg(), "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", af_chain,
@@ -490,14 +617,14 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         if v:
             base += ["-metadata", f"{k}={v}"]
     base += ["-movflags", "+faststart", "-pix_fmt"]
-    encoders = []
-    if _qsv_ok is not False:
-        encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
     crf_val = str(getattr(config, "OUT_CRF", 21))
     preset_val = str(getattr(config, "OUT_PRESET", "veryfast"))
-    encoders.append(("x264", ["yuv420p", "-c:v", "libx264", "-crf", crf_val, "-preset", preset_val]))
+    candidates = _tools.get_render_encoder_candidates(crf_val, preset_val)
+    if _qsv_ok is False:
+        candidates = [c for c in candidates if c[0] != "qsv"]
+
     err = None
-    for label, enc in encoders:
+    for label, enc in candidates:
         p = subprocess.run(base + enc + [f"{name}.mp4"], cwd=work, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", creationflags=NO_WINDOW, timeout=RENDER_SECONDS)
         if p.returncode == 0:
