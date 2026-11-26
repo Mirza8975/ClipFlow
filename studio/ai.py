@@ -424,7 +424,7 @@ def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, i
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}]}]}
     r = httpx.post(f"{base_url()}/chat/completions", json=body, headers=headers, timeout=timeout or 120)
     if r.status_code != 200:
-        _fail(r, model, k)
+        _fail(r, model)
     data = _openai_body(r)
     text = (data["choices"][0]["message"].get("content") or "")
     u = data.get("usage") or {}

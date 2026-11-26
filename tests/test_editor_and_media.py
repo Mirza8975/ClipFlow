@@ -641,6 +641,38 @@ class TestGeminiAIModelIntegration(unittest.TestCase):
         self.assertIn("ClipFlow couldn't reach", exp_conn)
         self.assertNotIn("PeakCut", exp_conn)
 
+    def test_see_non_200_raises_ai_error_and_redacts_key(self):
+        fake_img = b"\xff\xd8\xff\xd9"
+        for prov, secret, err_body in (
+            ("openai", "sk-openai-see-secret-999", "unauthorized sk-openai-see-secret-999"),
+            ("gemini", "AIzaGeminiSeeSecret999", "bad key AIzaGeminiSeeSecret999"),
+            ("anthropic", "sk-ant-see-secret-999", "invalid sk-ant-see-secret-999"),
+        ):
+            cfg = {"provider": prov, "models": ["vision-model-1"], "base_url": "", "key": secret}
+            fake_resp = MagicMock(status_code=401, headers={}, text=err_body)
+            with patch.object(self.ai, "current", return_value=cfg), \
+                 patch.object(self.ai, "provider", return_value=prov), \
+                 patch.object(self.ai, "models", return_value=["vision-model-1"]), \
+                 patch.object(self.ai, "key", return_value=secret), \
+                 patch("httpx.post", return_value=fake_resp):
+                with self.assertRaises(self.ai.AIError) as ctx:
+                    self.ai.see("Find webcam", fake_img)
+                self.assertNotIn(secret, str(ctx.exception))
+                self.assertIn("<key>", str(ctx.exception))
+                self.assertEqual(ctx.exception.model, "vision-model-1")
+
+        # Local OpenAI-compatible provider without an API key also raises AIError cleanly
+        cfg_ollama = {"provider": "ollama", "models": ["llava"], "base_url": "http://127.0.0.1:11434/v1", "key": ""}
+        fake_500 = MagicMock(status_code=500, headers={}, text="server error")
+        with patch.object(self.ai, "current", return_value=cfg_ollama), \
+             patch.object(self.ai, "provider", return_value="ollama"), \
+             patch.object(self.ai, "models", return_value=["llava"]), \
+             patch.object(self.ai, "key", return_value=""), \
+             patch("httpx.post", return_value=fake_500):
+            with self.assertRaises(self.ai.AIError) as ctx:
+                self.ai.see("Find webcam", fake_img)
+            self.assertEqual(ctx.exception.model, "llava")
+
 
 class TestFrameLayoutsAndDimensions(unittest.TestCase):
     def setUp(self):
