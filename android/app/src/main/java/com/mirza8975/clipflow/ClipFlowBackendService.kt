@@ -230,6 +230,7 @@ class ClipFlowBackendService : Service() {
 
             val ffmpegSo = File(nativeLibDirFile, "libffmpeg.so")
             val ffprobeSo = File(nativeLibDirFile, "libffprobe.so")
+            val qjsSo = File(nativeLibDirFile, "libqjs.so")
             if (ffmpegSo.exists()) {
                 ffmpegSo.setExecutable(true, false)
                 Log.i(TAG, "[NATIVE_LIBS] libffmpeg.so found: ${ffmpegSo.absolutePath} (size=${ffmpegSo.length()}B, executable=${ffmpegSo.canExecute()})")
@@ -241,6 +242,12 @@ class ClipFlowBackendService : Service() {
                 Log.i(TAG, "[NATIVE_LIBS] libffprobe.so found: ${ffprobeSo.absolutePath} (size=${ffprobeSo.length()}B, executable=${ffprobeSo.canExecute()})")
             } else {
                 Log.w(TAG, "[NATIVE_LIBS_WARNING] libffprobe.so not found in $nativeLibDir")
+            }
+            if (qjsSo.exists()) {
+                qjsSo.setExecutable(true, false)
+                Log.i(TAG, "[NATIVE_LIBS] libqjs.so found: ${qjsSo.absolutePath} (size=${qjsSo.length()}B, executable=${qjsSo.canExecute()})")
+            } else {
+                Log.w(TAG, "[NATIVE_LIBS_WARNING] libqjs.so not found in $nativeLibDir")
             }
 
             val dirContents = nativeLibDirFile.listFiles()?.map { it.name } ?: emptyList()

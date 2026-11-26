@@ -61,6 +61,61 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so android/app/src/main/jniLibs/arm64-v8a/libffprobe.so
           ls -lh android/app/src/main/jniLibs/arm64-v8a/
 
+      - name: Build and Verify ARM64 QuickJS-NG
+        run: |
+          set -e
+          echo "Building QuickJS-NG from pinned tag v0.14.0 (commit 3c051980ab7e783dfbfb1c70c014ce5e05ecf24c)..."
+          git clone --depth 1 --branch v0.14.0 https://github.com/quickjs-ng/quickjs.git quickjs-src
+          cd quickjs-src
+          COMMIT=$(git rev-parse HEAD)
+          echo "Cloned QuickJS-NG commit: $COMMIT"
+          if [ "$COMMIT" != "3c051980ab7e783dfbfb1c70c014ce5e05ecf24c" ]; then
+            echo "ERROR: QuickJS-NG commit mismatch! Expected 3c051980ab7e783dfbfb1c70c014ce5e05ecf24c, got $COMMIT"
+            exit 1
+          fi
+
+          # Resolve Android NDK directory from environment variables
+          NDK_DIR=""
+          for CANDIDATE in "$ANDROID_NDK_ROOT" "$ANDROID_NDK_HOME" "$ANDROID_NDK_LATEST_HOME"; do
+            if [ -n "$CANDIDATE" ] && [ -d "$CANDIDATE" ]; then
+              NDK_DIR="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$NDK_DIR" ]; then
+            echo "ERROR: Android NDK directory not found! Checked ANDROID_NDK_ROOT, ANDROID_NDK_HOME, ANDROID_NDK_LATEST_HOME."
+            exit 1
+          fi
+          echo "Using Android NDK: $NDK_DIR"
+
+          CLANG="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          STRIP="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          READELF="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          $CLANG -O2 -fPIE -pie -Wall -D_GNU_SOURCE -DCONFIG_VERSION=\"0.14.0\" -DQUICKJS_NG_BUILD \
+            -o qjs quickjs.c libregexp.c libunicode.c dtoa.c quickjs-libc.c gen/repl.c gen/standalone.c qjs.c -lm -ldl
+          $STRIP --strip-unneeded qjs
+
+          # Validate Android PIE executable headers
+          ELF_CLASS=$($READELF -h qjs | grep "Class:" | awk '{print $2}')
+          ELF_MACHINE=$($READELF -h qjs | grep "Machine:" | awk '{print $2}')
+          ELF_TYPE=$($READELF -h qjs | grep "Type:" | awk '{print $2}')
+          INTERP=$($READELF -l qjs | grep -o "linker64" || true)
+
+          echo "Verified QuickJS ELF: Class=$ELF_CLASS, Machine=$ELF_MACHINE, Type=$ELF_TYPE, Interp=$INTERP"
+          if [ "$ELF_CLASS" != "ELF64" ] || [ "$ELF_MACHINE" != "AArch64" ] || [ "$ELF_TYPE" != "DYN" ] || [ "$INTERP" != "linker64" ]; then
+            echo "ERROR: QuickJS binary failed Android PIE executable validation!"
+            exit 1
+          fi
+
+          mkdir -p ../android/app/src/main/jniLibs/arm64-v8a
+          cp qjs ../android/app/src/main/jniLibs/arm64-v8a/libqjs.so
+          chmod +x ../android/app/src/main/jniLibs/arm64-v8a/libqjs.so
+          cd ..
+          rm -rf quickjs-src
+          ls -lh android/app/src/main/jniLibs/arm64-v8a/libqjs.so
+
       - name: Download and Verify sherpa-onnx Android AAR
         run: |
           mkdir -p android/app/libs

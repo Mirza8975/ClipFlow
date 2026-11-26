@@ -417,5 +417,71 @@ class TestBrainFallbackMalformedTimestamps(unittest.TestCase):
                 self.assertIn("end", picks[0])
 
 
+class TestQuickJSRuntimeAndYtdlpConfig(unittest.TestCase):
+    def setUp(self):
+        from studio import media
+        self.media = media
+
+    def test_quickjs_discovery_via_env(self):
+        with tempfile.NamedTemporaryFile(suffix=".so") as tf:
+            os.chmod(tf.name, 0o755)
+            with patch.dict(os.environ, {"CLIPFLOW_QUICKJS_PATH": tf.name}):
+                self.assertEqual(tools.get_quickjs(), str(Path(tf.name).resolve()))
+                rt = tools.get_js_runtime()
+                self.assertIsNotNone(rt)
+                self.assertIn("quickjs", rt)
+                self.assertEqual(rt["quickjs"]["path"], str(Path(tf.name).resolve()))
+                self.assertTrue(tools.is_available("quickjs"))
+
+    def test_quickjs_fallback_when_missing(self):
+        with patch.dict(os.environ, {"CLIPFLOW_QUICKJS_PATH": "/nonexistent/libqjs.so"}):
+            with patch("shutil.which", return_value=None):
+                with patch.object(tools, "_places", return_value=[]):
+                    self.assertIsNone(tools.get_quickjs())
+                    self.assertFalse(tools.is_available("quickjs"))
+
+    def test_ydl_includes_js_runtimes_and_extractor_args(self):
+        mock_ydl_class = MagicMock()
+        with patch("yt_dlp.YoutubeDL", mock_ydl_class):
+            with patch.object(tools, "get_js_runtime", return_value={"quickjs": {"path": "/app/lib/libqjs.so"}}):
+                self.media._ydl({"test_opt": 123})
+                self.assertTrue(mock_ydl_class.called)
+                call_args = mock_ydl_class.call_args[0][0]
+                self.assertEqual(call_args["js_runtimes"], {"quickjs": {"path": "/app/lib/libqjs.so"}})
+                self.assertIn("extractor_args", call_args)
+                self.assertIn("youtube", call_args["extractor_args"])
+                self.assertIn("player_client", call_args["extractor_args"]["youtube"])
+                self.assertEqual(call_args["test_opt"], 123)
+
+    def test_normalize_youtube_url(self):
+        urls = [
+            ("https://youtu.be/kR8bhkVAgBY", "https://www.youtube.com/watch?v=kR8bhkVAgBY"),
+            ("https://youtu.be/kR8bhkVAgBY?si=abc123xyz", "https://www.youtube.com/watch?v=kR8bhkVAgBY"),
+            ("https://www.youtube.com/watch?v=kR8bhkVAgBY&feature=youtu.be", "https://www.youtube.com/watch?v=kR8bhkVAgBY"),
+            ("https://twitch.tv/streamer", "https://twitch.tv/streamer"),
+            ("https://kick.com/creator", "https://kick.com/creator"),
+        ]
+        for inp, expected in urls:
+            self.assertEqual(self.media.normalize_youtube_url(inp), expected)
+
+    def test_clear_youtube_pause_and_copy(self):
+        self.assertIn("ClipFlow", self.media.YT_BLOCKED)
+        self.assertNotIn("PeakCut", self.media.YT_BLOCKED)
+        self.media._yt_refused_until = 9999999999.0
+        self.assertTrue(self.media.youtube_paused())
+        self.media.clear_youtube_pause()
+        self.assertFalse(self.media.youtube_paused())
+
+    def test_non_youtube_isolation(self):
+        self.media._yt_refused_until = 9999999999.0
+        # Twitch and Kick URLs must NOT raise YouTubeBlocked even if circuit breaker is paused
+        self.media.check_youtube("https://www.twitch.tv/ninja")
+        self.media.check_youtube("https://kick.com/xqc")
+        # But YouTube URL must raise YouTubeBlocked
+        with self.assertRaises(self.media.YouTubeBlocked):
+            self.media.check_youtube("https://youtu.be/kR8bhkVAgBY")
+        self.media.clear_youtube_pause()
+
+
 if __name__ == "__main__":
     unittest.main()

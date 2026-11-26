@@ -108,6 +108,13 @@ def setup_environment(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 
             os.environ["PEAKCUT_FFPROBE_PATH"] = str(probe_bin.resolve())
             _log("i", f"[FFPROBE_RESOLVED] Found bundled ffprobe binary at: {probe_bin}")
 
+        qjs_bin = p_dir / "libqjs.so"
+        if not qjs_bin.is_file():
+            qjs_bin = p_dir / "qjs"
+        if qjs_bin.is_file():
+            os.environ["CLIPFLOW_QUICKJS_PATH"] = str(qjs_bin.resolve())
+            _log("i", f"[QUICKJS_RESOLVED] Found bundled QuickJS binary at: {qjs_bin}")
+
 
 def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765, timeout: float = 35.0) -> bool:
     """Starts the Uvicorn server in a background thread and waits until it responds to /healthz."""

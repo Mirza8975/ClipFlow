@@ -14,13 +14,13 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ---------------------------------------------------------------- when YouTube refuses this server
 # YouTube sometimes refuses a server's downloads altogether ("sign in to confirm you're not a bot"). It is a
-# refusal of the server, not of one video, so once it happens YouTube links are turned away at once for a few
-# minutes, with a clear message, instead of each one waiting to fail. Then the next link simply tries again.
-YT_PAUSE = 600
+# refusal of the server, not of one video, so once it happens YouTube links are turned away at once for a brief
+# cooldown with a clear message, instead of each one waiting to fail. Then the next link tries again.
+YT_PAUSE = 60
 _yt_refused_until = 0.0
-YT_BLOCKED = ("YouTube isn't letting PeakCut download videos right now. Upload the video file instead, or use a "
+YT_BLOCKED = ("YouTube isn't letting ClipFlow download videos right now. Upload the video file instead, or use a "
               "Twitch or Kick link. An admin can fix this by adding YouTube cookies under Settings, Connected apps. "
-              "YouTube links will be tried again in a few minutes.")
+              "YouTube links will be tried again in a few moments.")
 _BOT_CHECK = re.compile(r"not a bot|confirm you.?re not|sign in to confirm(?! your age)", re.I)
 
 
@@ -34,8 +34,37 @@ def is_youtube(url: str) -> bool:
     return host in ("youtube.com", "youtu.be") or host.endswith((".youtube.com", ".youtu.be"))
 
 
+def normalize_youtube_url(url: str) -> str:
+    """Normalize youtu.be and youtube.com watch URLs, stripping tracking query parameters."""
+    url = (url or "").strip()
+    if not is_youtube(url):
+        return url
+    from urllib.parse import urlparse, parse_qs
+    try:
+        u = urlparse(url)
+        host = (u.hostname or "").lower()
+        if host in ("youtu.be", "www.youtu.be"):
+            vid_id = u.path.strip("/")
+            if vid_id:
+                return f"https://www.youtube.com/watch?v={vid_id}"
+        elif "youtube.com" in host:
+            qs = parse_qs(u.query)
+            vid = qs.get("v", [""])[0]
+            if vid:
+                return f"https://www.youtube.com/watch?v={vid}"
+    except Exception:
+        pass
+    return url
+
+
 def youtube_paused() -> bool:
     return time.time() < _yt_refused_until
+
+
+def clear_youtube_pause():
+    """Reset the YouTube circuit breaker cooldown immediately."""
+    global _yt_refused_until
+    _yt_refused_until = 0.0
 
 
 def check_youtube(url: str):
@@ -140,6 +169,20 @@ def _ydl(opts):
     ffmpeg_bin = _tools.get_ffmpeg()
     if ffmpeg_bin and _tools.is_available("ffmpeg"):
         extra["ffmpeg_location"] = ffmpeg_bin
+
+    # JavaScript runtime configuration for EJS challenge solvers
+    js_runtime = _tools.get_js_runtime()
+    if js_runtime:
+        extra["js_runtimes"] = js_runtime
+
+    # Set resilient client priority and extractor arguments for YouTube
+    extra["extractor_args"] = {
+        "youtube": {
+            "player_client": ["ios", "android", "mweb", "web"],
+            "player_skip": ["configs"],
+        }
+    }
+
     # a channel or playlist link is answered as "a list" straight away, never walked video by video
     return yt_dlp.YoutubeDL({"noplaylist": True, "quiet": True, "no_warnings": True, "logger": _Quiet(),
                              "extract_flat": "in_playlist", "playlistend": 1, "socket_timeout": 20,
@@ -238,7 +281,7 @@ _PREVIEWS: dict = {}
 def preview(url: str) -> dict:
     """What the user will get from a link, checked before any work starts. The thumbnail comes back inline
     (the page may only load images from this site). Cached, so retyping a link costs nothing."""
-    url = url.strip()
+    url = normalize_youtube_url(url.strip())
     if url in _PREVIEWS:
         return _PREVIEWS[url]
     i = info(url)

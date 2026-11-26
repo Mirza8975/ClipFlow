@@ -114,7 +114,8 @@ chaquopy {
             install("python-multipart==0.0.9")
             install("numpy")
             install("pillow")
-            install("yt-dlp")
+            install("yt-dlp==2026.10.21")
+            install("yt-dlp-ejs==0.8.0")
         }
     }
 }

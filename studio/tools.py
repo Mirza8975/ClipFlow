@@ -224,12 +224,65 @@ def missing(force: bool = False) -> list:
 
 
 def is_available(name: str = "ffmpeg") -> bool:
-    """Return True if the specified binary (ffmpeg or ffprobe) is resolved and verified."""
+    """Return True if the specified binary is resolved and verified."""
+    if name in ("quickjs", "qjs", "js"):
+        return bool(get_js_runtime())
     return name in NEEDED and name not in missing()
 
 
+def get_quickjs() -> str | None:
+    """Return the resolved absolute path to the QuickJS executable, or None if unavailable."""
+    # 1. Explicit environment variable override
+    env_path = os.environ.get("CLIPFLOW_QUICKJS_PATH")
+    if env_path and Path(env_path).is_file() and os.access(env_path, os.X_OK):
+        return str(Path(env_path).resolve())
+
+    exe = ".exe" if sys.platform == "win32" else ""
+    # 2. Check Android native library directory and well-known installation folders
+    for d in _places():
+        so_bin = d / "libqjs.so"
+        if so_bin.is_file() and os.access(so_bin, os.X_OK):
+            return str(so_bin.resolve())
+        for n in ("qjs", "quickjs"):
+            cand = d / (n + exe)
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand.resolve())
+
+    # 3. System PATH
+    for n in ("qjs", "quickjs"):
+        p = shutil.which(n)
+        if p and os.access(p, os.X_OK):
+            return p
+
+    return None
+
+
+def get_js_runtime() -> dict | None:
+    """Return dict suitable for yt-dlp 'js_runtimes' parameter, or None if no runtime is available."""
+    # 1. Bundled / explicit QuickJS (Android nativeLibraryDir or desktop)
+    qjs = get_quickjs()
+    if qjs:
+        return {"quickjs": {"path": qjs}}
+
+    # 2. System Deno (Windows / Linux / macOS)
+    deno = shutil.which("deno")
+    if deno:
+        return {"deno": {"path": deno}}
+    if sys.platform == "win32":
+        local_deno = Path(os.environ.get("LOCALAPPDATA", "")) / "deno" / "bin" / "deno.exe"
+        if local_deno.is_file():
+            return {"deno": {"path": str(local_deno)}}
+
+    # 3. System Node.js
+    node = shutil.which("node")
+    if node:
+        return {"node": {"path": node}}
+
+    return None
+
+
 def get_diagnostics() -> dict:
-    """Return structured capability and path diagnostics for FFmpeg and FFprobe."""
+    """Return structured capability and path diagnostics for FFmpeg, FFprobe and JS runtimes."""
     if not _BINARIES:
         setup(force=True)
     return {
@@ -238,10 +291,12 @@ def get_diagnostics() -> dict:
         "help": get_help(),
         "capabilities": dict(_CAPABILITY),
         "binaries": dict(_BINARIES),
+        "js_runtime": get_js_runtime(),
         "env": {
             "CLIPFLOW_FFMPEG_DIR": os.environ.get("CLIPFLOW_FFMPEG_DIR"),
             "CLIPFLOW_FFMPEG_PATH": os.environ.get("CLIPFLOW_FFMPEG_PATH"),
             "CLIPFLOW_FFPROBE_PATH": os.environ.get("CLIPFLOW_FFPROBE_PATH"),
+            "CLIPFLOW_QUICKJS_PATH": os.environ.get("CLIPFLOW_QUICKJS_PATH"),
         }
     }
 
