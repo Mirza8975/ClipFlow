@@ -19,6 +19,7 @@
     <string name="diagnostics_copied">Diagnostics copied to clipboard</string>
     <string name="diagnostics_title">Engine Diagnostics &amp; Log</string>
     <string name="btn_retry_startup">Retry Startup</string>
+    <string name="btn_use_local_engine">Use Built-in On-Device Engine</string>
     <string name="nav_settings">Settings</string>
     <string name="startup_loading">Launching ClipFlow…</string>
     <string name="error_startup_title">ClipFlow couldn\'t start</string>

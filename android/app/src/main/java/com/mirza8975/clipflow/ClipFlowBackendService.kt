@@ -195,6 +195,7 @@ class ClipFlowBackendService : Service() {
     }
 
     private fun bootPythonBackend() {
+        acquireWakeLock()
         try {
             currentState = BackendState.Starting("Preparing environment and assets...")
             updateNotification("Preparing web assets and studio files...")
@@ -202,7 +203,7 @@ class ClipFlowBackendService : Service() {
             // 1. Prepare directories in app-private storage
             val dataDir = File(filesDir, "data").apply { mkdirs() }
             val webDir = File(filesDir, "web")
-            val binDir = File(dataDir, "bin").apply { mkdirs() }
+            File(dataDir, "bin").mkdirs()
             File(dataDir, "models").mkdirs()
             File(dataDir, "tmp").mkdirs()
             File(dataDir, "fonts").mkdirs()
@@ -294,10 +295,16 @@ class ClipFlowBackendService : Service() {
 
     private fun extractWebAssetsIfNeeded(destDir: File) {
         val versionFile = File(destDir, ".version")
-        val currentCode = BuildConfig.VERSION_CODE.toString()
+        val lastUpdateTime = try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        } catch (_: Exception) {
+            0L
+        }
+        val currentStamp = "${BuildConfig.VERSION_CODE}:$lastUpdateTime"
         val indexHtml = File(destDir, "index.html")
 
-        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentCode && indexHtml.exists() && indexHtml.length() > 0) {
+        if (destDir.exists() && versionFile.exists() && versionFile.readText().trim() == currentStamp && indexHtml.exists() && indexHtml.length() > 0) {
             return // Up to date
         }
 
@@ -307,7 +314,7 @@ class ClipFlowBackendService : Service() {
 
         copyAssetFolder("web", destDir)
         try {
-            versionFile.writeText(currentCode)
+            versionFile.writeText(currentStamp)
         } catch (e: IOException) {
             Log.w(TAG, "Failed to write web assets version file", e)
         }
@@ -354,13 +361,16 @@ class ClipFlowBackendService : Service() {
 
     private fun acquireWakeLock() {
         try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "ClipFlow:BackendServiceWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire(10 * 60 * 1000L) // 10 minutes timeout per acquisition
+                acquire(30 * 60 * 1000L) // 30 minutes timeout per boot/restart cycle
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not acquire WakeLock", e)

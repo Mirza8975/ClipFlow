@@ -66,9 +66,27 @@ def setup_environment(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 
     os.environ["CLIPFLOW_ACCOUNTS"] = "0"
     os.environ["PEAKCUT_ACCOUNTS"] = "0"
 
-    # Map persistent data directory
-    os.environ["CLIPFLOW_DATA"] = data_dir
-    os.environ["PEAKCUT_DATA"] = data_dir
+    # Map persistent data directory and writable Android temp/cache folders
+    if data_dir:
+        os.environ["CLIPFLOW_DATA"] = data_dir
+        os.environ["PEAKCUT_DATA"] = data_dir
+        tmp_dir = Path(data_dir) / "tmp"
+        fc_cache = tmp_dir / "fontconfig-cache"
+        xdg_cache = tmp_dir / "cache"
+        for d in (tmp_dir, fc_cache, xdg_cache):
+            d.mkdir(parents=True, exist_ok=True)
+        existing_tmp = os.environ.get("TMPDIR", "")
+        if not existing_tmp or not os.access(existing_tmp, os.W_OK):
+            os.environ["TMPDIR"] = str(tmp_dir)
+        existing_home = os.environ.get("HOME", "")
+        if not existing_home or not os.access(existing_home, os.W_OK):
+            os.environ["HOME"] = data_dir
+        existing_xdg = os.environ.get("XDG_CACHE_HOME", "")
+        if not existing_xdg or not os.access(existing_xdg, os.W_OK):
+            os.environ["XDG_CACHE_HOME"] = str(xdg_cache)
+    else:
+        os.environ["CLIPFLOW_DATA"] = data_dir
+        os.environ["PEAKCUT_DATA"] = data_dir
 
     # Root directory pointing to web assets
     if web_dir:
@@ -153,6 +171,20 @@ def start_server(data_dir: str, web_dir: str, ffmpeg_dir: str, port: int = 8765,
             _log("i", f"[FFMPEG_CAPABILITY_VERIFIED] Tools ready: ffmpeg={_tools.get_ffmpeg()}, ffprobe={_tools.get_ffprobe()}")
         else:
             _log("w", f"[FFMPEG_CAPABILITY_WARNING] Missing tools after setup: {missing_tools}. Help: {_tools.get_help()}")
+        sub_diag = _tools.get_subtitle_diagnostics()
+        if sub_diag.get("supported"):
+            _log(
+                "i",
+                f"[SUBTITLE_CAPABILITY_OK] path={sub_diag['ffmpeg_path']}, version={sub_diag['ffmpeg_version']}, "
+                f"ass={sub_diag['ass_filter']}, subtitles={sub_diag['subtitles_filter']}",
+            )
+        else:
+            _log(
+                "w",
+                f"[SUBTITLE_CAPABILITY_MISSING] path={sub_diag['ffmpeg_path']}, version={sub_diag['ffmpeg_version']}, "
+                f"ass={sub_diag['ass_filter']}, subtitles={sub_diag['subtitles_filter']}, "
+                f"missing={sub_diag['missing_dependencies']}. {sub_diag['remediation']}",
+            )
     except Exception as e:
         tb = traceback.format_exc()
         err_msg = f"Failed to import studio.server: {e}\n{tb}"

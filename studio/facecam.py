@@ -26,6 +26,7 @@ Only numpy and ffmpeg, which are already here.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -102,22 +103,37 @@ def _peaks(profile: np.ndarray, limit: int) -> list[tuple[int, float]]:
 
 
 def _size(path: str | Path) -> tuple[int, int]:
-    proc = subprocess.run(_tools.cmd(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                           "-show_entries", "stream=width,height", "-of", "default=nw=1", str(path)]),
-                          capture_output=True, text=True, timeout=60)
     w = h = 0
-    for line in (proc.stdout or "").splitlines():
-        if "=" not in line:
-            continue
-        k, _, v = line.partition("=")
+    if _tools.is_available("ffprobe"):
         try:
-            if k.strip() == "width":
-                w = int(v.strip())
-            elif k.strip() == "height":
-                h = int(v.strip())
-        except ValueError:
-            continue
-    return w, h
+            proc = subprocess.run(_tools.cmd(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                   "-show_entries", "stream=width,height", "-of", "default=nw=1", str(path)]),
+                                  capture_output=True, text=True, timeout=60)
+            for line in (proc.stdout or "").splitlines():
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                try:
+                    if k.strip() == "width":
+                        w = int(v.strip())
+                    elif k.strip() == "height":
+                        h = int(v.strip())
+                except ValueError:
+                    continue
+            if w and h:
+                return w, h
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        proc = subprocess.run(_tools.cmd(["ffmpeg", "-i", str(path)]), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
+        m = re.search(r"Stream\s+#\d+:\d+[^\n]*Video:[^\n]*?,\s*(\d{2,5})x(\d{2,5})(?=\s|\[|,|$)",
+                      (proc.stderr or "") + "\n" + (proc.stdout or ""))
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:  # noqa: BLE001
+        pass
+    return 0, 0
 
 
 def _stillness(frames: np.ndarray) -> np.ndarray:

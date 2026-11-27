@@ -16,6 +16,8 @@ import numpy as np
 from . import fetch_model
 
 _lock = threading.Lock()
+_android_lock = threading.RLock()
+_android_active_key = None
 
 # Several copies of the speech model, each on a few cores, instead of one copy on all of them: one copy cannot keep
 # a big machine busy, and several videos transcribing at once would queue behind each other inside it. On a small
@@ -201,9 +203,12 @@ class _AndroidRecognizer:
         from com.mirza8975.clipflow import SpeechEngine
         self.engine = SpeechEngine
         self.lang = lang
+        self._init_key = None
+        self._init_args = None
         self._init_engine()
 
     def _init_engine(self):
+        global _android_active_key
         fetch_model.ensure(self.lang, start=self.lang == fetch_model.DEFAULT)
         d = fetch_model.folder(self.lang)
         files = _model_files(d)
@@ -213,30 +218,38 @@ class _AndroidRecognizer:
         dec = files["decoder"]
         joiner = files.get("joiner", "")
         lang_code = "hi" if self.lang in ("hi", "hi-IN") else self.lang
-
-        ok = self.engine.initRecognizer(
-            str(d),
-            is_whisper,
-            enc,
-            dec,
-            joiner,
-            tok,
-            lang_code,
-            THREADS,
-        )
-        if not ok:
-            raise RuntimeError(f"Failed to initialize Android SpeechEngine for {self.lang}")
+        key = (str(d), lang_code)
+        args = (str(d), is_whisper, enc, dec, joiner, tok, lang_code, THREADS)
+        with _android_lock:
+            ok = self.engine.initRecognizer(*args)
+            if not ok:
+                raise RuntimeError(f"Failed to initialize Android SpeechEngine for {self.lang}")
+            self._init_key = key
+            self._init_args = args
+            _android_active_key = key
 
     def decode_pieces(self, pieces: list) -> list:
+        global _android_active_key
         results = []
-        for seg in pieces:
-            # Canonical format: 16,000 Hz, 1-channel, normalized Float32 little-endian bytes
-            float_arr = np.ascontiguousarray(seg, dtype=np.float32)
-            raw_bytes = float_arr.tobytes()
-            res = self.engine.transcribeFloatBytesDetailed(raw_bytes, 16000)
-            tokens = list(res.get("tokens") or [])
-            timestamps = [float(t) for t in (res.get("timestamps") or [])]
-            results.append((tokens, timestamps))
+        with _android_lock:
+            is_loaded = getattr(self.engine, "isModelLoaded", None)
+            engine_unloaded = callable(is_loaded) and (is_loaded() is False)
+            if (_android_active_key != self._init_key or engine_unloaded) and self._init_args is not None:
+                ok = self.engine.initRecognizer(*self._init_args)
+                if not ok:
+                    raise RuntimeError(f"Failed to reinitialize Android SpeechEngine for {self.lang}")
+                _android_active_key = self._init_key
+            for seg in pieces:
+                # Canonical format: 16,000 Hz, 1-channel, normalized Float32 little-endian bytes
+                float_arr = np.ascontiguousarray(seg, dtype=np.float32)
+                raw_bytes = float_arr.tobytes()
+                res = self.engine.transcribeFloatBytesDetailed(raw_bytes, 16000)
+                results.append(_normalize_result(
+                    res.get("tokens"),
+                    res.get("timestamps"),
+                    res.get("text"),
+                    len(float_arr),
+                ))
         return results
 
 
@@ -350,9 +363,40 @@ BATCH = int(os.environ.get("PEAKCUT_ASR_BATCH", "1"))   # pieces decoded togethe
 ARABIC_MARKS = re.compile(r"[ً-ْٰـ]")    # vowel marks and the stretching line (tatweel)
 
 
+def _synthesize_timestamps(count: int, existing: list, dur: float) -> list:
+    """Fill missing timestamps monotonically across segment duration when Whisper omits timing metadata."""
+    if count <= 0:
+        return []
+    if len(existing) >= count:
+        return list(existing[:count])
+    ts = [float(t) for t in existing]
+    start_t = ts[-1] + 0.05 if ts else 0.05
+    span = max(0.05, dur - 0.15 - start_t)
+    missing = count - len(ts)
+    for idx in range(missing):
+        frac = idx / max(1, missing - 1) if missing > 1 else 0.0
+        ts.append(round(start_t + frac * span, 3))
+    return ts
+
+
+def _normalize_result(tokens, timestamps, text, seg_len: int) -> tuple[list, list]:
+    """Ensure decoded tokens have matching timestamps and fall back to text tokens when tokens are absent."""
+    toks = list(tokens or [])
+    ts = [float(t) for t in (timestamps or [])]
+    if not toks and isinstance(text, str) and text.strip():
+        parts = text.strip().split()
+        toks = [(" " + p) if i > 0 else p for i, p in enumerate(parts)]
+    if toks and len(ts) < len(toks):
+        dur = max(0.2, seg_len / 16000.0)
+        ts = _synthesize_timestamps(len(toks), ts, dur)
+    return toks, ts
+
+
 def _words(tokens, timestamps, a: int, b: int) -> list:
     out = []
     tokens = [ARABIC_MARKS.sub("", t) for t in tokens]       # Arabic captions read as people type them: no vowel marks
+    if tokens and len(timestamps) < len(tokens):
+        timestamps = _synthesize_timestamps(len(tokens), list(timestamps or []), max(0.2, (b - a) / 16000.0))
     off, seg_end = a / 16000.0, b / 16000.0
     cur, gap = None, False
     for tok, t in zip(tokens, timestamps):
@@ -388,7 +432,15 @@ def decode_pieces(pieces: list, rec=None, lang: str = fetch_model.DEFAULT) -> li
             st.accept_waveform(16000, seg)
             streams.append(st)
         rec.decode_streams(streams)
-        return [(list(st.result.tokens), [float(t) for t in st.result.timestamps]) for st in streams]
+        return [
+            _normalize_result(
+                getattr(st.result, "tokens", None),
+                getattr(st.result, "timestamps", None),
+                getattr(st.result, "text", None),
+                len(seg),
+            )
+            for seg, st in zip(pieces, streams)
+        ]
     finally:
         _give_back(rec, lang)
 
@@ -477,7 +529,8 @@ def transcribe(audio: np.ndarray, on_progress=None, lang: str = fetch_model.DEFA
 
     # Pieces are independent, so they go to every copy of the model that is free: a video alone on the server
     # uses all of it, and several videos share it piece by piece. The words come back in order.
-    workers = REMOTE_PARALLEL if remote else COPIES
+    from . import tools as _tools
+    workers = 1 if (not remote and _tools.is_android()) else (REMOTE_PARALLEL if remote else COPIES)
     if workers > 1 and len(groups) > 1:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(min(workers, len(groups)), thread_name_prefix="asr") as ex:

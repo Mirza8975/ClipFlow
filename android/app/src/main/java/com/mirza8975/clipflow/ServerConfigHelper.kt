@@ -40,6 +40,20 @@ class ServerConfigHelper(private val context: Context) {
 
             return targetPort == basePort
         }
+
+        /**
+         * Returns true when [url] is blank or targets the embedded on-device loopback engine.
+         */
+        fun isLocalEngineUrl(url: String?): Boolean {
+            val raw = url?.trim() ?: return true
+            if (raw.isEmpty()) return true
+            val host = try {
+                Uri.parse(raw).host?.lowercase()
+            } catch (_: Exception) {
+                null
+            } ?: return false
+            return host == "127.0.0.1" || host == "localhost" || host == "::1"
+        }
     }
 
     private val client = OkHttpClient.Builder()
@@ -97,14 +111,22 @@ class ServerConfigHelper(private val context: Context) {
             return Pair(false, "Invalid host address.")
         }
 
-        // Validate whether host is strictly an RFC1918 private IPv4 address or loopback
-        val isRfc1918OrLoopback = isStrictRfc1918OrLoopback(host)
-
-        if (scheme == "http" && !isRfc1918OrLoopback) {
-            return Pair(
-                false,
-                "Security policy: Public domains and public IPs must use HTTPS (https://). Plain HTTP is only permitted for explicit private LAN IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost."
-            )
+        // Enforce HTTPS in release builds (plain HTTP permitted only for embedded 127.0.0.1/localhost);
+        // debug builds additionally allow explicit RFC 1918 LAN IPv4 subnets for local Wi-Fi testing.
+        if (scheme == "http") {
+            if (!BuildConfig.DEBUG) {
+                if (host != "127.0.0.1" && host != "localhost") {
+                    return Pair(
+                        false,
+                        "Security policy: Release builds require HTTPS (https://) for remote servers. Plain HTTP is restricted to the on-device 127.0.0.1 engine."
+                    )
+                }
+            } else if (!isStrictRfc1918OrLoopback(host)) {
+                return Pair(
+                    false,
+                    "Security policy: Public domains and public IPs must use HTTPS (https://). Plain HTTP is only permitted for explicit private LAN IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost."
+                )
+            }
         }
 
         return Pair(true, null)

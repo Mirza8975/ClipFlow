@@ -93,7 +93,10 @@ def _startup():
         if uploads.is_dir():
             for f in uploads.glob("*"):      # uploads cut short by a restart
                 try:
-                    f.unlink()
+                    if f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+                    else:
+                        f.unlink()
                 except OSError:
                     pass
     except Exception as e:
@@ -111,6 +114,16 @@ def _startup():
     try:
         if _tools.missing(force=True):
             print("\n  " + _tools.get_help() + "\n", flush=True)
+        sub_diag = _tools.get_subtitle_diagnostics()
+        if not sub_diag.get("supported"):
+            sub_msg = (
+                f"Subtitle filter check failed (path={sub_diag.get('ffmpeg_path')}, "
+                f"version={sub_diag.get('ffmpeg_version')}, ass={sub_diag.get('ass_filter')}, "
+                f"subtitles={sub_diag.get('subtitles_filter')}, "
+                f"missing={sub_diag.get('missing_dependencies')}): {sub_diag.get('remediation')}"
+            )
+            print(f"[ClipFlow] {sub_msg}", flush=True)
+            STARTUP_STATE["warnings"].append(sub_msg)
     except Exception as e:
         msg = f"Tools verification notice: {e}"
         print(f"[ClipFlow] {msg}", flush=True)
@@ -753,6 +766,7 @@ def status(request: Request):
     missing_tools = _tools.missing()
     return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(),
             "no_ffmpeg": bool(missing_tools), "ffmpeg_help": _tools.get_help() if missing_tools else "", "is_android": _tools.is_android(),
+            "subtitle_support": _tools.get_subtitle_diagnostics(),
             "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
@@ -1260,17 +1274,32 @@ def bulk_delete(body: dict = Body(...)):
     return account.delete_many(vids, _pairs(body.get("clips")))
 
 
-@app.get("/api/clips.zip")
-def clips_zip(ids: str = ""):
+@app.api_route("/api/clips.zip", methods=["GET", "HEAD"])
+def clips_zip(request: Request, ids: str = ""):
     """Many clips as one download. `ids` is video.clip pairs separated by commas."""
-    _throttle("zip:" + ctx.uid(), 12, 600, "Give it a moment: you just downloaded several groups of clips.")
     pairs = _pairs([p.split(".", 1) for p in ids.split(",") if "." in p][:300])
+    fname = f"peakcut-clips-{len(pairs)}.zip"
+    if request.method == "HEAD":
+        try:
+            files = account.resolve_zip_clips(pairs)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return Response(
+            status_code=200,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "private, no-store",
+                "X-Clip-Count": str(len(files)),
+            },
+        )
+    _throttle("zip:" + ctx.uid(), 12, 600, "Give it a moment: you just downloaded several groups of clips.")
     try:
         f = account.zip_clips(pairs)
     except ValueError as e:
         raise HTTPException(400, str(e))
     from starlette.background import BackgroundTask
-    return FileResponse(f, filename=f"peakcut-clips-{len(pairs)}.zip", media_type="application/zip",
+    return FileResponse(f, filename=fname, media_type="application/zip",
                         headers={"Cache-Control": "private, no-store"}, background=BackgroundTask(lambda: f.unlink(missing_ok=True)))
 
 
@@ -1302,7 +1331,7 @@ def delete_my_account(request: Request, body: dict = Body(...)):
     return resp
 
 
-@app.get("/media/{jid}/{name}")
+@app.api_route("/media/{jid}/{name}", methods=["GET", "HEAD"])
 def media_file(jid: str, name: str, download: int = 0):
     if not re.fullmatch(r"[\w\-]+\.(mp4|jpg)", name):
         raise HTTPException(404)
@@ -1538,8 +1567,11 @@ def ai_usage():
 
 # ---------------------------------------------------------------- the AI key and model, set from the dashboard
 # Only the owner (or an admin, when accounts are on) reaches these. The key is never sent back to the page.
-def _ai_error(e) -> str:
-    return safe.friendly(e, 300).replace(ai.key() or "\0", "<key>")
+def _ai_error(e, extra_key: str = None) -> str:
+    msg = safe.friendly(e, 300).replace(ai.key() or "\0", "<key>")
+    if extra_key:
+        msg = msg.replace(extra_key, "<key>")
+    return msg
 
 
 @app.get("/api/ai")
@@ -1566,26 +1598,36 @@ def ai_put(request: Request, body: dict = Body(...)):
 def ai_models(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aimodels:" + ctx.uid(), 30, 600)
+    provider_id = (body.get("provider") or "").strip() or None
+    base_url = (body.get("base_url") or "").strip() or None
+    key_val = (body.get("key") or "").strip() or None
     try:
-        return {"models": ai.list_models(body.get("provider"), body.get("base_url"), body.get("key"))}
+        return {"models": ai.list_models(provider_id, base_url, key_val)}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
-        reason = ai.explain(e)
+        reason = ai.explain(e, provider_id=provider_id)
         raise HTTPException(502, f"The service did not give its list of models. {reason}" if reason else
-                            "The service did not give its list of models. Check the key, or type the model yourself. " + _ai_error(e)[:160])
+                            "The service did not give its list of models. Check the key, or type the model yourself. " + _ai_error(e, key_val)[:160])
 
 
 @app.post("/api/ai/test")
-def ai_test(request: Request):
+def ai_test(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aitest:" + ctx.uid(), 20, 600)
+    raw_model = body.get("model") or body.get("models")
+    model = ", ".join(ai.parse_models(raw_model)) if isinstance(raw_model, (list, tuple)) else str(raw_model or "").strip()
+    provider_id = (body.get("provider") or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    key_val = (body.get("key") or "").strip()
     try:
-        return ai.test()
+        return ai.test(model=model or None, provider_id=provider_id or None,
+                       address=base_url or None, key_val=key_val or None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, ai.explain(e) or "The AI did not answer: " + _ai_error(e))
+        reason = ai.explain(e, model=model or None, provider_id=provider_id or None)
+        raise HTTPException(502, reason or "The AI did not answer: " + _ai_error(e, key_val))
 
 
 # ---------------------------------------------------------------- speech models, one per spoken language

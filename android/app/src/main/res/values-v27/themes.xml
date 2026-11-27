@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ theme overrides (windowLightNavigationBar requires API level 27) -->
+    <style name="Theme.ClipFlow" parent="Base.Theme.ClipFlow">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

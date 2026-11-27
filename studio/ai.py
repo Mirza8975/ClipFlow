@@ -84,8 +84,20 @@ def key() -> str:
     return current()["key"]
 
 
-def label() -> str:
-    return PROVIDERS.get(provider(), ("",))[0]
+def label(provider_id: str = None) -> str:
+    p = ALIASES.get(str(provider_id or provider()).strip().lower(), str(provider_id or provider()).strip().lower())
+    return PROVIDERS.get(p, ("",))[0]
+
+
+def parse_models(model_ids) -> list[str]:
+    """Normalize a comma-separated string or sequence into ordered unique non-empty model IDs."""
+    if isinstance(model_ids, (list, tuple)):
+        items = [str(x).strip() for x in model_ids if str(x).strip()]
+    elif isinstance(model_ids, str):
+        items = [x.strip() for x in model_ids.split(",") if x.strip()]
+    else:
+        items = []
+    return list(dict.fromkeys(items))[:5]
 
 
 def base_url() -> str:
@@ -115,9 +127,7 @@ def save(provider_id: str, model_ids, address: str = "", new_key=None) -> dict:
     p = ALIASES.get(str(provider_id or "").strip().lower(), str(provider_id or "").strip().lower())
     if p not in PROVIDERS:
         raise ValueError("Choose one of the AI services in the list.")
-    if isinstance(model_ids, str):
-        model_ids = model_ids.split(",")
-    ms = [str(m).strip()[:120] for m in (model_ids or []) if str(m).strip()][:5]
+    ms = [m[:120] for m in parse_models(model_ids)]
     if not ms:
         raise ValueError("Enter the model to use.")
     if any(not re.fullmatch(r"[\w.\-:/@]+", m) for m in ms):
@@ -147,7 +157,7 @@ def save(provider_id: str, model_ids, address: str = "", new_key=None) -> dict:
 def list_models(provider_id=None, address=None, with_key=None) -> list:
     """The model ids a service offers, so the settings page can show a list to pick from."""
     c = current()
-    p = ALIASES.get(str(provider_id or c["provider"]).lower(), str(provider_id or c["provider"]).lower())
+    p = ALIASES.get(str(provider_id or c["provider"]).strip().lower(), str(provider_id or c["provider"]).strip().lower())
     if p not in PROVIDERS:
         raise ValueError("Choose one of the AI services in the list.")
     k = str(with_key or "").strip() or (c["key"] if c["provider"] == p else "")
@@ -171,20 +181,46 @@ def list_models(provider_id=None, address=None, with_key=None) -> list:
                 continue
             mid = m.get("name", "").split("/")[-1]
             low_id = mid.lower()
-            if mid and low_id != "aqa" and not any(t in low_id for t in ("-tts", "-image", "imagen-", "veo-", "lyria-", "embedding")):
+            if mid and low_id != "aqa" and not any(t in low_id for t in ("-tts", "-image", "imagen-", "veo-", "lyria-", "embedding", "bison")):
                 found.append(mid)
     else:
         found = [m.get("id", "") for m in data.get("data", []) if isinstance(m, dict)]
     return sorted({m for m in found if m})[:400]
 
 
-def test() -> dict:
-    """One tiny request with the settings in use, to prove the key, the address and the model all work."""
-    ms = models()
-    if not ready():
-        raise ValueError("Save a service, a model and a key first.")
-    out, sent, wrote = call(ms[0], 'Answer with a JSON array that holds the single string "ok".', {"type": "ARRAY", "items": {"type": "STRING"}})
-    return {"ok": True, "model": ms[0], "tokens": sent + wrote, "answer": str(out)[:80]}
+def test(model: str = None, provider_id: str = None, address: str = None, key_val: str = None) -> dict:
+    """One tiny request to prove the key, the address and the model all work."""
+    c = current()
+    p = ALIASES.get(str(provider_id or c["provider"]).strip().lower(), str(provider_id or c["provider"]).strip().lower())
+    if p not in PROVIDERS:
+        raise ValueError("Choose one of the AI services in the list.")
+    ms = parse_models(model) or list(c["models"])
+    if not ms:
+        raise ValueError("Enter the model to use.")
+    k = str(key_val or "").strip() or (c["key"] if c["provider"] == p else "")
+    if not k and p not in NO_KEY:
+        raise ValueError("Paste the key for this service.")
+    base = str(address or "").strip().rstrip("/") or (c["base_url"] if c["provider"] == p else "") or PROVIDERS[p][1]
+    if not base:
+        raise ValueError("Enter the service's address first.")
+    last_err = None
+    for m in ms:
+        try:
+            out, sent, wrote = call(m, 'Answer with a JSON array that holds the single string "ok".',
+                                    {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    provider_id=p, base=base, api_key=k)
+            return {"ok": True, "model": m, "models_tested": ms, "tokens": sent + wrote, "answer": str(out)[:80]}
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if not getattr(e, "model", None):
+                try:
+                    e.model = m
+                except Exception:
+                    pass
+            low = str(e).lower()
+            if "http 401" in low or "http 403" in low or "api key" in low or "api_key" in low:
+                break
+    raise last_err
 
 
 class AIError(RuntimeError):
@@ -199,25 +235,28 @@ class AIError(RuntimeError):
 problem = {"text": "", "at": 0.0}       # why the AI last failed, for the dashboard; cleared when it answers again
 
 
-def explain(e) -> str:
+def explain(e, model: str = None, provider_id: str = None) -> str:
     """What went wrong with an AI call, in words the owner can act on."""
     text, low = str(e), str(e).lower()
-    name = (models() or ["?"])[0]
+    parsed = parse_models(model)
+    name = getattr(e, "model", None) or (parsed[0] if parsed else (models() or ["?"])[0])
+    p = ALIASES.get(str(provider_id or provider()).strip().lower(), str(provider_id or provider()).strip().lower())
+    svc_label = label(p) or "The AI service"
     m = re.match(r"HTTP (\d{3})\b", text)
     status = m.group(1) if m else ""
     if status in ("401", "403") or "api key" in low or "api_key" in low or "unauthorized" in low or "permission" in low:
-        return f"{label()} refused the key. Paste a working key under Settings, AI."
+        return f"{svc_label} refused the key. Paste a working key under Settings, AI."
     if "no longer available" in low or "deprecated" in low or "retired" in low or "discontinued" in low:
-        return f"{label()} has retired \"{name}\" (or it isn't available to new keys). Open Settings, AI, press Find models and pick a newer model."
+        return f"{svc_label} has retired \"{name}\" (or it isn't available to new keys). Open Settings, AI, press Find models and pick a newer model."
     # Only a 404 that is about a model says the model is unknown. A 400 like "API key not found" or a stray
     # "404" inside some other message must not be reported as an unknown model.
     if (status == "404" and "model" in low) or (not status and ("404" in text or "not found" in low or "does not exist" in low or "unknown model" in low or "not_found" in low)) \
             or (status and "is not found for api version" in low):
-        return f"{label()} doesn't know the model \"{name}\". Open Settings, AI, press Find models and pick one from the list."
+        return f"{svc_label} doesn't know the model \"{name}\". Open Settings, AI, press Find models and pick one from the list."
     if "429" in text or "quota" in low or "rate limit" in low or "exhausted" in low:
-        return f"{label()} says the key has hit its limit or has no credit left. Check the account with {label()}, or try again later."
+        return f"{svc_label} says the key has hit its limit or has no credit left. Check the account with {svc_label}, or try again later."
     if "connect" in low or "timed out" in low or "timeout" in low or "getaddrinfo" in low or "refused" in low or "nodename" in low or "servname" in low or "nameresolutionerror" in low or "name resolution" in low:
-        return f"PeakCut couldn't reach {label()}. Check the internet connection" + (" and that Ollama is running." if provider() == "ollama" else ".")
+        return f"ClipFlow couldn't reach {svc_label}. Check the internet connection" + (" and that Ollama is running." if p == "ollama" else ".")
     return ""
 
 
@@ -244,11 +283,15 @@ def asked_wait(r) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def _fail(r, model):
+def _fail(r, model, used_key: str = None):
     text = r.text[:300].replace(key() or "\0", "<key>")
+    if used_key:
+        text = text.replace(used_key, "<key>")
     limited = r.status_code in (429, 503)
-    raise AIError(f"HTTP {r.status_code} {text}", wait=asked_wait(r) if limited else None,
+    err = AIError(f"HTTP {r.status_code} {text}", wait=asked_wait(r) if limited else None,
                   daily=limited and bool(re.search(r"PerDay|per day|daily", r.text or "", re.I)))
+    err.model = model
+    raise err
 
 
 # ---------------------------------------------------------------- the schema, said in words for chat models
@@ -326,13 +369,17 @@ def _parse(text):
 
 
 # ---------------------------------------------------------------- one call
-def call(model: str, prompt: str, schema: dict, timeout: float | None = None):
+def call(model: str, prompt: str, schema: dict, timeout: float | None = None,
+         provider_id: str | None = None, base: str | None = None, api_key: str | None = None):
     """Ask one model. Returns (the parsed JSON answer, tokens sent, tokens written back).
 
     `timeout` is how long one answer may take. A live stream passes a short one, because a slow
     answer must not stop the recording."""
-    how = PROVIDERS[provider()][2]
-    return {"gemini": _gemini, "openai": _openai, "anthropic": _anthropic}[how](model, prompt, schema, timeout)
+    p = ALIASES.get(str(provider_id or provider()).strip().lower(), str(provider_id or provider()).strip().lower())
+    how = PROVIDERS[p][2]
+    return {"gemini": _gemini, "openai": _openai, "anthropic": _anthropic}[how](
+        model, prompt, schema, timeout, base=base, api_key=api_key
+    )
 
 
 def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, int, int]:
@@ -389,9 +436,11 @@ def _gem(model: str) -> str:
     return model.removeprefix("models/")
 
 
-def _gemini(model, prompt, schema, timeout=None):
-    url = f"{base_url()}/{_gem(model)}:generateContent"
-    headers = {"x-goog-api-key": key()}
+def _gemini(model, prompt, schema, timeout=None, base=None, api_key=None):
+    b = (base or base_url()).rstrip("/")
+    k = api_key if api_key is not None else key()
+    url = f"{b}/{_gem(model)}:generateContent"
+    headers = {"x-goog-api-key": k}
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json", "responseSchema": schema}}
     r = httpx.post(url, json=body, headers=headers, timeout=timeout or 120)
@@ -402,7 +451,7 @@ def _gemini(model, prompt, schema, timeout=None):
         r = httpx.post(url, json=plain, headers=headers, timeout=timeout or 120)
         used_plain = True
     if r.status_code != 200:
-        _fail(r, model)
+        _fail(r, model, k)
     data = r.json()
     text = "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
     u = data.get("usageMetadata", {})
@@ -462,29 +511,33 @@ def _from_events(text: str) -> dict:
     return {"choices": [{"message": message}], "usage": usage}
 
 
-def _openai(model, prompt, schema, timeout=None):
-    headers = {"Authorization": f"Bearer {key()}"} if key() else {}
+def _openai(model, prompt, schema, timeout=None, base=None, api_key=None):
+    b = (base or base_url()).rstrip("/")
+    k = api_key if api_key is not None else key()
+    headers = {"Authorization": f"Bearer {k}"} if k else {}
     body = {"model": model, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}], "stream": False}
     # Most services accept these two extras; a few models refuse one of them, so they are dropped on a refusal.
     extras = [{"temperature": 0.4, "response_format": {"type": "json_object"}}, {"response_format": {"type": "json_object"}}, {}]
     r = None
     for extra in extras:
-        r = httpx.post(f"{base_url()}/chat/completions", json={**body, **extra}, headers=headers, timeout=timeout or 180)
+        r = httpx.post(f"{b}/chat/completions", json={**body, **extra}, headers=headers, timeout=timeout or 180)
         if r.status_code not in (400, 422):
             break
     if r.status_code != 200:
-        _fail(r, model)
+        _fail(r, model, k)
     data = _openai_body(r)
     u = data.get("usage") or {}
     return _parse(data["choices"][0]["message"].get("content")), int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
 
 
-def _anthropic(model, prompt, schema, timeout=None):
+def _anthropic(model, prompt, schema, timeout=None, base=None, api_key=None):
+    b = (base or base_url()).rstrip("/")
+    k = api_key if api_key is not None else key()
     body = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
-    r = httpx.post(f"{base_url()}/messages", json=body, timeout=timeout or 180,
-                   headers={"x-api-key": key(), "anthropic-version": "2023-06-01"})
+    r = httpx.post(f"{b}/messages", json=body, timeout=timeout or 180,
+                   headers={"x-api-key": k, "anthropic-version": "2023-06-01"})
     if r.status_code != 200:
-        _fail(r, model)
+        _fail(r, model, k)
     data = r.json()
     text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
     u = data.get("usage") or {}

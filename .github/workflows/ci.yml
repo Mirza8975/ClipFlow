@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          pip install flake8 pytest
+          pip install flake8
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Lint with flake8 (critical errors & syntax)
@@ -42,7 +42,7 @@ jobs:
           # stop the build if there are Python syntax errors or undefined names
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__
 
-      - name: Run unit test suite
+      - name: Run full test suite
         run: |
           python -m tests.run
 

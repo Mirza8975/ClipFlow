@@ -1,27 +1,28 @@
 # ClipFlow Android Application
 
-Official Android native shell for **ClipFlow**, packaged with modern Android WebView, native video file chooser, secure `DownloadManager` clip downloads, and configurable Wi-Fi PC server connection.
+Official standalone & companion Android client for **ClipFlow 2.0**, bundling an embedded Chaquopy Python 3.11 + FastAPI backend, ARM64 FFmpeg/FFprobe (with `libass` subtitle rendering), QuickJS-NG, and sherpa-onnx offline speech recognition, alongside configurable remote Wi-Fi/HTTPS server support.
 
-- **Package ID**: `com.mirza8975.clipflow`
+- **Package ID**: `com.mirza8975.clipflow` (`.debug` suffix on Debug builds)
 - **Minimum OS**: Android 7.0 (API 24)
 - **Target OS**: Android 14 (API 34)
-- **Language**: Kotlin
+- **ABI**: `arm64-v8a`
+- **Language**: Kotlin + embedded Python 3.11 (Chaquopy)
 
 ---
 
-## Security Architecture & Policies
+## Security & Storage Architecture
 
-1. **Zero JavaScript Bridge**: No `@JavascriptInterface` or `addJavascriptInterface` is used anywhere in the project. This completely eliminates iframe injection, reflective method invocation, and cross-document context vulnerabilities.
-2. **Exact Origin Validation**: Navigation, redirects, and downloads are strictly validated using parsed scheme, lowercase host, and effective port (`ServerConfigHelper.isSameOrigin`). String-based prefix matching is avoided to prevent prefix spoofing.
-3. **Download Cookie Scoping & Redirect Defense**: Session cookies (`peakcut_session`) are attached to `DownloadManager.Request` **only** after verifying that the download destination matches the exact configured server origin and that no cross-origin redirects exist.
-4. **Scheme & Subresource Interception**: `shouldOverrideUrlLoading` and `shouldInterceptRequest` strictly block non-HTTP(S) schemes (`javascript:`, `file:`, `content:`, `data:`). External HTTPS links (e.g. Google OAuth) open in the system browser.
+1. **Origin-Locked Share Bridge**: Only `ClipFlowAndroid.shareClip` is exposed via `@JavascriptInterface`, and both the active WebView page origin and requested media URL must pass `ServerConfigHelper.isSameOrigin` before caching to `cacheDir/shared_clips` and opening a `FileProvider` `ACTION_SEND` share intent.
+2. **Exact Origin Validation**: Navigation, redirects, and downloads validate parsed scheme, lowercase host, and effective port (`ServerConfigHelper.isSameOrigin`).
+3. **Scoped Downloads & Gallery Visibility**: Same-origin `OkHttp` streaming downloads (with cookie scoping and cross-origin redirect rejection) save `.mp4` video clips to `Movies/ClipFlow` (`MediaStore.Video` on API 29+, `DIRECTORY_MOVIES/ClipFlow` + `MediaScannerConnection` on API 24–28) so clips appear reliably in Gallery/Photos, while multi-clip `.zip` bundles save to `Downloads/ClipFlow` (`MediaStore.Downloads` on API 29+).
+4. **Scheme & Subresource Interception**: `shouldOverrideUrlLoading` and `shouldInterceptRequest` block arbitrary `javascript:`, `file:`, `content:`, and non-raster `data:` schemes while permitting strictly validated same-origin `blob:` previews and raster thumbnails.
 5. **Cleartext HTTP Policy**:
-   - **Production Release Builds** (`assembleRelease`): Cleartext HTTP is **strictly disabled** at the platform level (`src/main/res/xml/network_security_config.xml` has `cleartextTrafficPermitted="false"`). All production traffic must use verified TLS / HTTPS.
-   - **Debug / Local Wi-Fi Testing** (`assembleDebug`): Cleartext HTTP is enabled in `src/debug/res/xml/network_security_config.xml` to allow connecting to PC servers (`http://192.168.x.x:8765`) over local Wi-Fi. In addition, application code (`ServerConfigHelper`) strictly restricts plain HTTP to RFC 1918 private IPv4 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and localhost.
+   - **Production Release Builds** (`assembleRelease`): `src/main/res/xml/network_security_config.xml` sets `cleartextTrafficPermitted="false"` globally and permits cleartext HTTP **only** for `127.0.0.1` and `localhost` (required for the embedded local backend). `ServerConfigHelper.validateUrlSecurity` also enforces HTTPS for all remote servers in Release builds.
+   - **Debug / Local Wi-Fi Testing** (`assembleDebug`): `src/debug/res/xml/network_security_config.xml` enables cleartext HTTP and user CAs for local development only, and `ServerConfigHelper` restricts plain HTTP to verified RFC 1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and loopback.
 
 ---
 
-## Connecting Over Local Wi-Fi
+## Connecting Over Local Wi-Fi (Debug Builds) or HTTPS (Release Builds)
 
 1. **Start ClipFlow on your PC**:
    ```bash
@@ -62,3 +63,43 @@ cd android
 ```
 Output APK location:
 `android/app/build/outputs/apk/debug/app-debug.apk`
+
+---
+
+## Production Release Signing Setup
+
+Production releases must be signed with a dedicated private upload/release keystore (never with the Android Debug key, and never committed to source control — `*.keystore` and `*.jks` are ignored by `android/.gitignore`).
+
+### 1. Generate a Release Keystore (Once, Offline)
+```bash
+keytool -genkeypair -v \
+  -keystore clipflow-release.keystore \
+  -alias clipflow-release \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+Back up `clipflow-release.keystore` and its passwords in a secure password manager.
+
+### 2. Configure GitHub Actions Secrets
+Encode the keystore without line wrapping and store all four secrets in **Repository → Settings → Secrets and variables → Actions**:
+```bash
+base64 -w 0 clipflow-release.keystore
+```
+- `KEYSTORE_BASE64`: Base64 contents of `clipflow-release.keystore`
+- `KEY_ALIAS`: Key alias (e.g. `clipflow-release`)
+- `KEYSTORE_PASSWORD`: Keystore password
+- `KEY_PASSWORD`: Key password
+
+When all four secrets are configured, CI signs `app-release.apk`, verifies it with Android `apksigner`, confirms it does not use `CN=Android Debug`, and uploads `ClipFlow-release-apk`. Tagged releases (`v*.*.*`) and manual signed release dispatches fail if any signing secret is missing; PR verification builds without secrets produce an explicitly labeled `ClipFlow-release-unsigned-apk` artifact (`app-release-unsigned.apk`).
+
+### 3. Local Signed Build & Signature Verification
+```bash
+cd android
+./gradlew assembleRelease \
+  -Pandroid.injected.signing.store.file=/path/to/clipflow-release.keystore \
+  -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+  -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+  -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+"$ANDROID_SDK_ROOT"/build-tools/*/apksigner verify --verbose --print-certs \
+  app/build/outputs/apk/release/app-release.apk
+```

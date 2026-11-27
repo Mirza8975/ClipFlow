@@ -169,6 +169,20 @@ check("a 400 about the request itself is not called an unknown model",
 check("a 404 that is not about a model is not called an unknown model",
       "doesn't know" not in explained('HTTP 404 {"error": {"message": "Method not allowed for this path"}}'))
 check("quota is still quota", "limit" in explained('HTTP 429 {"error": {"status": "RESOURCE_EXHAUSTED"}}'))
+
+# `see()` non-200 failure in OpenAI-compatible mode must raise AIError (not NameError) and redact the active key
+use("openai")
+ai.save("openai", "gpt-4o-mini", "", "sk-see-fail-secret")
+ai.httpx.post = lambda *a, **kw: Reply(401, {"error": {"message": "bad key sk-see-fail-secret"}})
+see_err = None
+try:
+    ai.see("describe frame", b"jpeg-bytes")
+except ai.AIError as exc:
+    see_err = exc
+check("see() openai non-200 raises AIError cleanly and redacts key",
+      see_err is not None and "sk-see-fail-secret" not in str(see_err) and "<key>" in str(see_err) and getattr(see_err, "model", None) == "gpt-4o-mini",
+      str(see_err))
+
 ai.httpx.get, ai.httpx.post = real_get, real_post_fn
 
 print("ALL PASSED" if not fails else f"{len(fails)} failed")
