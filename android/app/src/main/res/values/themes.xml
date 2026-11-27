@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Base application theme (NoActionBar, Full Dark) -->
-    <style name="Theme.ClipFlow" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Base.Theme.ClipFlow" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Status Bar & Navigation Bar Colors -->
         <item name="android:statusBarColor">@color/status_bar</item>
         <item name="android:navigationBarColor">@color/nav_bar</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
 
         <!-- Primary Branding Colors -->
         <item name="colorPrimary">@color/accent_blue</item>
@@ -15,6 +14,8 @@
         <item name="android:windowBackground">@color/bg_dark</item>
         <item name="android:colorBackground">@color/bg_dark</item>
     </style>
+
+    <style name="Theme.ClipFlow" parent="Base.Theme.ClipFlow" />
 
     <!-- Splash Screen Theme (Android 12+) -->
     <style name="Theme.ClipFlow.Splash" parent="Theme.SplashScreen">

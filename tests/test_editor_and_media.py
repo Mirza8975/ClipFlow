@@ -2242,6 +2242,181 @@ class TestProductFinishingRegressions(unittest.TestCase):
         gradle_kts = (root / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
         self.assertIn("hasCompleteReleaseSigning", gradle_kts)
 
+    def test_runner_pythonpath_cwd_and_editor_import(self):
+        import ast
+        from tests import run as runner
+
+        repo_root = Path(__file__).resolve().parent.parent
+        resolved_root = str(repo_root.resolve())
+        self.assertEqual(runner.ROOT, repo_root)
+
+        # Unset or empty PYTHONPATH adds only repository root
+        self.assertEqual(runner._build_pythonpath(None, repo_root), resolved_root)
+        self.assertEqual(runner._build_pythonpath("", repo_root), resolved_root)
+
+        # Existing PYTHONPATH entries remain preserved in order without duplicating repo root
+        with tempfile.TemporaryDirectory() as td:
+            extra_a = str((Path(td) / "extra_a").resolve())
+            extra_b = str((Path(td) / "extra_b").resolve())
+            merged = runner._build_pythonpath(f"{extra_a}{os.pathsep}{extra_b}", repo_root)
+            self.assertEqual(merged.split(os.pathsep), [resolved_root, extra_a, extra_b])
+
+            dedup_input = os.pathsep.join([
+                extra_a,
+                f"{repo_root}{os.sep}",
+                ".",
+                extra_a,
+                extra_b,
+                resolved_root,
+            ])
+            deduped = runner._build_pythonpath(dedup_input, repo_root)
+            self.assertEqual(deduped.split(os.pathsep), [resolved_root, extra_a, extra_b])
+
+            env_out = runner._build_test_env(
+                Path(td) / "data",
+                base_env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": f"{extra_a}{os.pathsep}{resolved_root}"},
+                repo_root=repo_root,
+            )
+            self.assertEqual(env_out["PYTHONPATH"].split(os.pathsep), [resolved_root, extra_a])
+            self.assertEqual(env_out["CLIPFLOW_DATA"], str(Path(td) / "data"))
+
+            # Verify tests.run determines repo root independently of initial process cwd
+            outer_cwd = Path(td) / "outer_cwd"
+            outer_cwd.mkdir()
+            probe_dir = Path(td) / "external_tests"
+            probe_dir.mkdir()
+            probe_script = probe_dir / "probe_import.py"
+            probe_script.write_text(
+                "import os\n"
+                "from pathlib import Path\n"
+                "from studio import config, tools\n"
+                "root = Path(config.__file__).resolve().parent.parent\n"
+                "tools_root = Path(tools.__file__).resolve().parent.parent\n"
+                "print(f'CWD={Path.cwd().resolve()}')\n"
+                "print(f'CFG={root}')\n"
+                "print(f'TOOLS={tools_root}')\n"
+                "print(f'PYTHONPATH={os.environ.get(\"PYTHONPATH\", \"\")}')\n",
+                encoding="utf-8",
+            )
+            cwd_check = probe_dir / "check_root_from_outside_cwd.py"
+            cwd_check.write_text(
+                "import os, sys\n"
+                "from pathlib import Path\n"
+                f"sys.path.insert(0, {resolved_root!r})\n"
+                "from tests import run as r\n"
+                "print(f'INIT_CWD={Path.cwd().resolve()}')\n"
+                "print(f'RUN_ROOT={r.ROOT}')\n",
+                encoding="utf-8",
+            )
+            root_proc = subprocess.run(
+                [sys.executable, str(cwd_check)],
+                cwd=outer_cwd,
+                env={"PATH": os.environ.get("PATH", "")},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(root_proc.returncode, 0, root_proc.stderr)
+            root_info = dict(line.split("=", 1) for line in root_proc.stdout.strip().splitlines() if "=" in line)
+            self.assertEqual(Path(root_info["INIT_CWD"]).resolve(), outer_cwd.resolve())
+            self.assertEqual(Path(root_info["RUN_ROOT"]).resolve(), repo_root.resolve())
+
+            # Verify from an external parent cwd and a script outside repo_root so sys.path[0] != repo_root
+            child_env = runner._build_test_env(
+                Path(td) / "child_data",
+                base_env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": extra_a},
+                repo_root=repo_root,
+            )
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(outer_cwd)
+                proc = subprocess.run(
+                    [sys.executable, str(probe_script)],
+                    cwd=runner.ROOT,
+                    env=child_env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            lines = dict(line.split("=", 1) for line in proc.stdout.strip().splitlines() if "=" in line)
+            self.assertEqual(Path(lines["CWD"]).resolve(), repo_root.resolve())
+            self.assertEqual(Path(lines["CFG"]).resolve(), repo_root.resolve())
+            self.assertEqual(Path(lines["TOOLS"]).resolve(), repo_root.resolve())
+            self.assertEqual(lines["PYTHONPATH"].split(os.pathsep), [resolved_root, extra_a])
+
+        # Verify every subprocess invocation inside tests/run.py main() binds cwd=ROOT and env=env
+        tree = ast.parse((repo_root / "tests" / "run.py").read_text(encoding="utf-8"))
+        main_fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        subproc_calls = [
+            n for n in ast.walk(main_fn)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "subprocess"
+            and n.func.attr in ("Popen", "run")
+        ]
+        self.assertGreaterEqual(len(subproc_calls), 2)
+        for call in subproc_calls:
+            kw_map = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+            self.assertIsInstance(kw_map.get("cwd"), ast.Name)
+            self.assertEqual(kw_map["cwd"].id, "ROOT")
+            self.assertIsInstance(kw_map.get("env"), ast.Name)
+            self.assertEqual(kw_map["env"].id, "env")
+
+        # Count parser invariants remain intact
+        self.assertEqual(runner._parse_suite_counts(["Ran 18 tests in 0.02s", "OK"], 0), (18, 18, 0, 0))
+        self.assertEqual(runner._parse_suite_counts(["Ran 4 tests in 0.01s", "OK (skipped=1)"], 0), (4, 3, 0, 1))
+        self.assertEqual(runner._parse_suite_counts(["PASS one", "SKIP two"], 0), (2, 1, 0, 1))
+        self.assertEqual(runner._parse_suite_counts(["ModuleNotFoundError"], 1), (1, 0, 1, 0))
+
+    def test_android_themes_v27_newapi_compliance(self):
+        import xml.etree.ElementTree as ET
+
+        root = Path(__file__).resolve().parent.parent
+        gradle_kts = (root / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+        self.assertIn("minSdk = 24", gradle_kts)
+
+        base_themes_path = root / "android" / "app" / "src" / "main" / "res" / "values" / "themes.xml"
+        v27_themes_path = root / "android" / "app" / "src" / "main" / "res" / "values-v27" / "themes.xml"
+        self.assertTrue(base_themes_path.is_file())
+        self.assertTrue(v27_themes_path.is_file())
+
+        base_root = ET.fromstring(base_themes_path.read_text(encoding="utf-8"))
+        v27_root = ET.fromstring(v27_themes_path.read_text(encoding="utf-8"))
+
+        base_styles = {el.attrib["name"]: el for el in base_root.findall("style")}
+        v27_styles = {el.attrib["name"]: el for el in v27_root.findall("style")}
+
+        self.assertIn("Base.Theme.ClipFlow", base_styles)
+        self.assertIn("Theme.ClipFlow", base_styles)
+        self.assertIn("Theme.ClipFlow.Splash", base_styles)
+        self.assertEqual(base_styles["Base.Theme.ClipFlow"].attrib.get("parent"), "Theme.MaterialComponents.DayNight.NoActionBar")
+        self.assertEqual(base_styles["Theme.ClipFlow"].attrib.get("parent"), "Base.Theme.ClipFlow")
+        self.assertEqual(base_styles["Theme.ClipFlow.Splash"].attrib.get("parent"), "Theme.SplashScreen")
+
+        # Base API 24 theme must preserve base items and not contain API 27+ windowLightNavigationBar or suppress lint
+        base_items = {item.attrib.get("name"): (item.text or "").strip() for item in base_styles["Base.Theme.ClipFlow"].findall("item")}
+        self.assertEqual(base_items.get("android:statusBarColor"), "@color/status_bar")
+        self.assertEqual(base_items.get("android:navigationBarColor"), "@color/nav_bar")
+        self.assertEqual(base_items.get("android:windowLightStatusBar"), "false")
+        splash_items = {item.attrib.get("name"): (item.text or "").strip() for item in base_styles["Theme.ClipFlow.Splash"].findall("item")}
+        self.assertEqual(splash_items.get("postSplashScreenTheme"), "@style/Theme.ClipFlow")
+        base_item_names = [item.attrib.get("name") for item in base_root.findall(".//item")]
+        self.assertNotIn("android:windowLightNavigationBar", base_item_names)
+        self.assertNotIn("tools:targetApi", base_themes_path.read_text(encoding="utf-8"))
+        manifest_src = (root / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        self.assertIn('@style/Theme.ClipFlow', manifest_src)
+
+        # API 27+ override inherits Base.Theme.ClipFlow and preserves light navigation bar setting
+        self.assertIn("Theme.ClipFlow", v27_styles)
+        self.assertEqual(v27_styles["Theme.ClipFlow"].attrib.get("parent"), "Base.Theme.ClipFlow")
+        v27_items = {item.attrib.get("name"): (item.text or "").strip() for item in v27_styles["Theme.ClipFlow"].findall("item")}
+        self.assertEqual(v27_items.get("android:windowLightNavigationBar"), "false")
+
 
 if __name__ == "__main__":
     unittest.main()
