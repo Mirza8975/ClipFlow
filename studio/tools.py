@@ -21,6 +21,7 @@ _BINARIES: dict[str, str] = {}
 _CAPABILITY: dict[str, dict] = {}
 _SUPPORTED_ENCODERS: set[str] | None = None
 _SUPPORTED_FILTERS: set[str] | None = None
+_VERSION_INFO: dict[str, tuple[str, str]] = {}
 
 
 def is_android() -> bool:
@@ -126,8 +127,12 @@ def _places() -> list:
 
 def setup(force: bool = False) -> list:
     """Make ffmpeg and ffprobe reachable for everything ClipFlow runs. Returns missing tools."""
-    global HELP
+    global HELP, _SUPPORTED_ENCODERS, _SUPPORTED_FILTERS
     HELP = get_help()
+    if force:
+        _SUPPORTED_ENCODERS = None
+        _SUPPORTED_FILTERS = None
+        _VERSION_INFO.clear()
     exe = ".exe" if sys.platform == "win32" else ""
     missing = []
     for name in NEEDED:
@@ -369,17 +374,107 @@ def get_supported_filters(ffmpeg_bin: str = None) -> set[str]:
     return set(filters)
 
 
-def has_filter(filter_name: str, ffmpeg_bin: str = None) -> bool:
+def _probe_ffmpeg_version_output(ffmpeg_bin: str = None) -> tuple[str, str]:
+    """Return (version_line, configuration_line) by executing ffmpeg -version."""
+    if not ffmpeg_bin and _BINARIES.get("ffmpeg") in _VERSION_INFO:
+        return _VERSION_INFO[_BINARIES["ffmpeg"]]
+    exe = ffmpeg_bin or get_ffmpeg()
+    if not ffmpeg_bin and exe in _VERSION_INFO:
+        return _VERSION_INFO[exe]
+    ver_line = ""
+    conf_line = ""
+    try:
+        proc = subprocess.run([exe, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=5.0)
+        if proc.returncode == 0:
+            lines = proc.stdout.decode("utf-8", errors="replace").splitlines()
+            if lines:
+                ver_line = lines[0].strip()
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("configuration:"):
+                    conf_line = stripped
+                    break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not ffmpeg_bin and (ver_line or conf_line):
+        _VERSION_INFO[exe] = (ver_line, conf_line)
+    return ver_line, conf_line
+
+
+def get_ffmpeg_version(ffmpeg_bin: str = None) -> str:
+    """Return the first line of `ffmpeg -version`, or 'unavailable' if execution fails."""
+    ver_line, _ = _probe_ffmpeg_version_output(ffmpeg_bin)
+    return ver_line or "unavailable"
+
+
+def has_filter(filter_name: str, ffmpeg_bin: str = None, default_if_empty: bool = True) -> bool:
     """Check if the resolved or provided FFmpeg binary supports the specified filter."""
     filters = get_supported_filters(ffmpeg_bin)
     if not filters:
-        return True
+        return default_if_empty
     return filter_name in filters
 
 
 def has_ass_filter(ffmpeg_bin: str = None) -> bool:
-    """Check if the FFmpeg binary supports the 'ass' filter for burned-in subtitles."""
-    return has_filter("ass", ffmpeg_bin)
+    """Check if the FFmpeg binary actually lists the 'ass' filter (never assumes support if probing fails)."""
+    return has_filter("ass", ffmpeg_bin, default_if_empty=False)
+
+
+def has_subtitles_filter(ffmpeg_bin: str = None) -> bool:
+    """Check if the FFmpeg binary actually lists the 'subtitles' filter."""
+    return has_filter("subtitles", ffmpeg_bin, default_if_empty=False)
+
+
+def get_subtitle_diagnostics(ffmpeg_bin: str = None) -> dict:
+    """Inspect actual FFmpeg binary capabilities for ASS/subtitle burning without hardcoded assumptions."""
+    exe = ffmpeg_bin or get_ffmpeg()
+    ver_line, conf_line = _probe_ffmpeg_version_output(ffmpeg_bin)
+    filters = get_supported_filters(ffmpeg_bin)
+    ass_ok = bool(filters) and ("ass" in filters)
+    subtitles_ok = bool(filters) and ("subtitles" in filters)
+    drawtext_ok = bool(filters) and ("drawtext" in filters)
+
+    missing_deps: list[str] = []
+    if not filters or not ver_line:
+        missing_deps.append("executable ffmpeg binary failed -version/-filters probe")
+    if not ass_ok:
+        missing_deps.append("FFmpeg 'ass' filter")
+    if not subtitles_ok:
+        missing_deps.append("FFmpeg 'subtitles' filter")
+    if conf_line:
+        for flag, lib_name in (
+            ("--enable-libass", "libass"),
+            ("--enable-libfreetype", "libfreetype"),
+            ("--enable-libfribidi", "libfribidi"),
+            ("--enable-libharfbuzz", "libharfbuzz"),
+        ):
+            if flag not in conf_line and not ass_ok:
+                missing_deps.append(lib_name)
+        if "--enable-fontconfig" not in conf_line and not ass_ok:
+            missing_deps.append("fontconfig (recommended for system fallback fonts)")
+    elif not ass_ok:
+        missing_deps.extend(["libass", "libfreetype", "libfribidi", "libharfbuzz"])
+
+    remediation = (
+        "Subtitle burning supported via FFmpeg 'ass' filter."
+        if ass_ok
+        else (
+            "Rebuild/repackage the bundled FFmpeg binary with libass support "
+            "(--enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz) "
+            "and verify `-filters` includes `ass` and `subtitles`."
+        )
+    )
+    return {
+        "supported": ass_ok,
+        "ffmpeg_path": exe,
+        "ffmpeg_version": ver_line or "unavailable",
+        "ass_filter": ass_ok,
+        "subtitles_filter": subtitles_ok,
+        "drawtext_filter": drawtext_ok,
+        "missing_dependencies": missing_deps,
+        "remediation": remediation,
+    }
 
 
 def get_best_blur_filter(ffmpeg_bin: str = None) -> str:
@@ -417,6 +512,8 @@ def get_diagnostics() -> dict:
         "missing": list(_seen["missing"]),
         "help": get_help(),
         "capabilities": dict(_CAPABILITY),
+        "ffmpeg_version": get_ffmpeg_version(),
+        "subtitle_support": get_subtitle_diagnostics(),
         "encoders": sorted(list(get_video_encoders())),
         "filters": sorted(list(get_supported_filters())),
         "binaries": dict(_BINARIES),

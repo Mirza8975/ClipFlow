@@ -1,14 +1,21 @@
 """Turns a time range into a vertical clip: 9:16 layout, bouncy word captions, hook title, cover."""
+import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
+import threading
+import unicodedata
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from . import config, roman, tools as _tools
 from .media import NO_WINDOW, run
 
 W, H = config.OUT_W, config.OUT_H
+BUNDLED_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+_fonts_lock = threading.Lock()
 
 # ASS colours are &HBBGGRR. `size` is the ASS font size (line height); _Font turns it into real pixels.
 STYLES = {
@@ -29,13 +36,137 @@ FONT_FILES = {"Poppins ExtraBold": "Poppins-ExtraBold.ttf", "Anton": "Anton-Regu
 CAP_MAX_W = int(getattr(config, "OUT_W", 1080) * 0.82)   # 885px on 1080w: stays within Instagram Reels/TikTok right-side action icons
 
 
+def _parse_ttf_cmap_ranges(font_bytes: bytes, tables: dict[bytes, int]) -> tuple[tuple[int, int], ...]:
+    """Extract sorted inclusive Unicode codepoint ranges from a TTF/OTF cmap table (formats 4 and 12)."""
+    cmap_off = tables.get(b"cmap")
+    if cmap_off is None or cmap_off + 4 > len(font_bytes):
+        return ()
+    num_tables = struct.unpack_from(">H", font_bytes, cmap_off + 2)[0]
+    best_off = None
+    best_fmt = None
+    best_prio = -1
+    for i in range(num_tables):
+        rec_off = cmap_off + 4 + i * 8
+        if rec_off + 8 > len(font_bytes):
+            break
+        pid, eid, sub_rel = struct.unpack_from(">HHI", font_bytes, rec_off)
+        sub_off = cmap_off + sub_rel
+        if sub_off + 4 > len(font_bytes):
+            continue
+        fmt = struct.unpack_from(">H", font_bytes, sub_off)[0]
+        if fmt == 12 and pid in (0, 3):
+            prio = 4 if (pid == 3 and eid == 10) else 3
+        elif fmt == 4 and ((pid == 3 and eid in (0, 1)) or pid == 0):
+            prio = 2 if (pid == 3 and eid == 1) else 1
+        else:
+            continue
+        if prio > best_prio:
+            best_prio = prio
+            best_off = sub_off
+            best_fmt = fmt
+    if best_off is None:
+        return ()
+
+    ranges: list[tuple[int, int]] = []
+    if best_fmt == 12 and best_off + 16 <= len(font_bytes):
+        n_groups = struct.unpack_from(">I", font_bytes, best_off + 12)[0]
+        for g in range(n_groups):
+            g_off = best_off + 16 + g * 12
+            if g_off + 12 > len(font_bytes):
+                break
+            start_ch, end_ch, start_gid = struct.unpack_from(">III", font_bytes, g_off)
+            if start_gid == 0 and start_ch == end_ch:
+                continue
+            ranges.append((start_ch, end_ch))
+    elif best_fmt == 4 and best_off + 14 <= len(font_bytes):
+        seg_count_x2 = struct.unpack_from(">H", font_bytes, best_off + 6)[0]
+        seg_count = seg_count_x2 // 2
+        end_off = best_off + 14
+        start_off = end_off + seg_count_x2 + 2
+        delta_off = start_off + seg_count_x2
+        range_off = delta_off + seg_count_x2
+        if range_off + seg_count_x2 <= len(font_bytes):
+            for s in range(seg_count):
+                end_ch = struct.unpack_from(">H", font_bytes, end_off + s * 2)[0]
+                start_ch = struct.unpack_from(">H", font_bytes, start_off + s * 2)[0]
+                if start_ch == 0xFFFF and end_ch == 0xFFFF:
+                    continue
+                ranges.append((start_ch, end_ch))
+    ranges.sort()
+    return tuple(ranges)
+
+
+def _is_emoji_codepoint(cp: int) -> bool:
+    return (
+        0x1F000 <= cp <= 0x1FAFF
+        or 0x2600 <= cp <= 0x27BF
+        or 0x2300 <= cp <= 0x23FF
+        or 0x2B00 <= cp <= 0x2BFF
+        or 0xFE00 <= cp <= 0xFE0F
+        or cp in (0x200D, 0x20E3)
+    )
+
+
+def _char_script(ch: str) -> str:
+    cp = ord(ch)
+    if _is_emoji_codepoint(cp):
+        return "emoji"
+    if 0x0900 <= cp <= 0x097F or 0xA8E0 <= cp <= 0xA8FF:
+        return "devanagari"
+    if (
+        0x0600 <= cp <= 0x06FF
+        or 0x0750 <= cp <= 0x077F
+        or 0x08A0 <= cp <= 0x08FF
+        or 0xFB50 <= cp <= 0xFDFF
+        or 0xFE70 <= cp <= 0xFEFF
+    ):
+        return "arabic"
+    if 0xAC00 <= cp <= 0xD7AF or 0x1100 <= cp <= 0x11FF or 0x3130 <= cp <= 0x318F:
+        return "korean"
+    if 0x3000 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF or 0xFF00 <= cp <= 0xFFEF:
+        return "cjk"
+    return "latin"
+
+
+def _grapheme_cluster_count(text: str) -> int:
+    """Count visual clusters (combining marks and ZWJ-joined emoji sequences do not multiply count)."""
+    if not text:
+        return 0
+    count = 0
+    after_zwj = False
+    for ch in text:
+        cp = ord(ch)
+        cat = unicodedata.category(ch)
+        if cp == 0x200D:
+            after_zwj = True
+            continue
+        if cat in ("Mn", "Me") or 0xFE00 <= cp <= 0xFE0F:
+            continue
+        if after_zwj:
+            after_zwj = False
+            continue
+        if cat == "Mc":
+            continue
+        count += 1
+        after_zwj = False
+    return max(count, 1 if text.strip() else 0)
+
+
+_FALLBACK_FONT_PATTERNS = {
+    "devanagari": ("NotoSansDevanagari-Bold.ttf", "NotoSansDevanagari-Regular.ttf", "NotoSansDevanagari-VF.ttf", "NotoSerifDevanagari-VF.ttf"),
+    "arabic": ("NotoNaskhArabic-Bold.ttf", "NotoNaskhArabic-Regular.ttf", "NotoNaskhArabicUI-Bold.ttf", "NotoSansArabic-Regular.ttf"),
+    "korean": ("NotoSansCJK-Regular.ttc", "NotoSansKR-Regular.otf"),
+    "cjk": ("NotoSansCJK-Regular.ttc", "NotoSerifCJK-Regular.ttc"),
+    "latin": ("NotoSans-Bold.ttf", "Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"),
+}
+
+
 class _Font:
-    """Measures text exactly as the renderer will draw it, so every word can be placed by hand: the highlighted
-    word can grow without pushing its neighbours, and the heading box fits its text."""
+    """Measures text using the bundled TTF for Latin and script-aware Fontconfig fallbacks for Unicode/emoji."""
     _cache: dict = {}
+    _fallback_cache: dict[str, Path | None] = {}
 
     def __init__(self, name):
-        import struct
         path = Path(__file__).resolve().parent / "fonts" / FONT_FILES.get(name, FONT_FILES["Poppins ExtraBold"])
         d = path.read_bytes()
         tables = {}
@@ -47,6 +178,7 @@ class _Font:
         self.asc, self.desc = struct.unpack(">HH", d[o + 74: o + 78])      # what the renderer sizes the font by
         self.cap = struct.unpack(">h", d[o + 88: o + 90])[0] or int(self.upm * 0.7)
         self.path = str(path)
+        self.cmap_ranges = _parse_ttf_cmap_ranges(d, tables)
         self._pil = {}
 
     @classmethod
@@ -55,11 +187,64 @@ class _Font:
             cls._cache[name] = cls(name)
         return cls._cache[name]
 
+    def has_codepoint(self, cp: int) -> bool:
+        if not self.cmap_ranges:
+            return cp < 0x250 or 0x1E00 <= cp <= 0x1EFF
+        for start_cp, end_cp in self.cmap_ranges:
+            if cp < start_cp:
+                return False
+            if cp <= end_cp:
+                return True
+        return False
+
+    def supports_text(self, text: str) -> bool:
+        """Return True iff every printable glyph in text exists natively in this bundled TTF."""
+        for ch in text or "":
+            if ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf", "Mn", "Me"):
+                continue
+            if _is_emoji_codepoint(ord(ch)) or not self.has_codepoint(ord(ch)):
+                return False
+        return True
+
+    def uses_simple_latin_metrics(self, text: str) -> bool:
+        """Return True only when text can be accurately measured as simple unshaped Latin in this TTF."""
+        for ch in text or "":
+            if ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf", "Mn", "Me"):
+                continue
+            cp = ord(ch)
+            if _is_emoji_codepoint(cp) or _char_script(ch) != "latin" or not self.has_codepoint(cp):
+                return False
+        return True
+
+    @classmethod
+    def find_fallback_font(cls, script: str) -> Path | None:
+        if script in cls._fallback_cache:
+            return cls._fallback_cache[script]
+        patterns = _FALLBACK_FONT_PATTERNS.get(script, ())
+        search_dirs = (
+            Path("/system/fonts"),
+            config.FONTS_DIR,
+            BUNDLED_FONTS_DIR,
+            Path("/usr/share/fonts"),
+        )
+        found: Path | None = None
+        for d in search_dirs:
+            if not d.is_dir():
+                continue
+            for pat in patterns:
+                cand = d / pat
+                if cand.is_file() and cand.stat().st_size > 0:
+                    found = cand
+                    break
+            if found:
+                break
+        cls._fallback_cache[script] = found
+        return found
+
     def em(self, size):
         return size * self.upm / (self.asc + self.desc)
 
-    def width(self, text, size):
-        """Pixels wide at this ASS size."""
+    def _measure_bundled(self, text: str, size: float) -> float:
         try:
             from PIL import ImageFont
             if "f" not in self._pil:
@@ -68,26 +253,286 @@ class _Font:
         except Exception:  # noqa: BLE001 - no measuring library: a fair estimate keeps clips rendering
             return len(text) * self.em(size) * 0.62
 
+    def _measure_fallback_segment(self, seg: str, script: str, size: float) -> float:
+        if not seg:
+            return 0.0
+        # Pure emoji sequence (including ZWJ families, variation selectors, regional indicators)
+        if script == "emoji":
+            clusters = 0
+            after_zwj = False
+            reg_ind = 0
+            for ch in seg:
+                cp = ord(ch)
+                if cp == 0x200D:
+                    after_zwj = True
+                    continue
+                if 0xFE00 <= cp <= 0xFE0F or cp == 0x20E3:
+                    continue
+                if 0x1F1E6 <= cp <= 0x1F1FF:
+                    reg_ind += 1
+                    if reg_ind % 2 == 1 and not after_zwj:
+                        clusters += 1
+                    after_zwj = False
+                    continue
+                reg_ind = 0
+                if after_zwj:
+                    after_zwj = False
+                    continue
+                clusters += 1
+            return max(1, clusters) * size * 1.15
+
+        pil_w = 0.0
+        fb_font = self.find_fallback_font(script)
+        if fb_font is not None:
+            try:
+                from PIL import ImageFont
+                key = str(fb_font)
+                if key not in self._pil:
+                    self._pil[key] = ImageFont.truetype(key, 200)
+                pil_w = float(self._pil[key].getlength(seg)) * size / 200.0
+            except Exception:
+                pil_w = 0.0
+
+        est = 0.0
+        prev_virama = False
+        for ch in seg:
+            cp = ord(ch)
+            cat = unicodedata.category(ch)
+            if ch.isspace():
+                est += size * 0.28
+                prev_virama = False
+                continue
+            if cp == 0x094D:  # Devanagari virama triggers conjunct contraction
+                prev_virama = True
+                continue
+            if cat in ("Mn", "Me") or cp in (0x200C, 0x200D) or 0xFE00 <= cp <= 0xFE0F:
+                continue
+            if cat == "Mc":
+                est += size * 0.28
+                prev_virama = False
+                continue
+            if script == "devanagari":
+                est += size * (0.48 if prev_virama else 0.68)
+            elif script == "arabic":
+                est += size * 0.56
+            elif script in ("cjk", "korean"):
+                est += size * 1.02
+            else:
+                est += self.em(size) * 0.62
+            prev_virama = False
+        return max(pil_w, est) if (pil_w > 0 and script == "arabic") else (pil_w or est)
+
+    def width(self, text, size):
+        """Pixels wide at this ASS size, switching cleanly to script-aware metrics for non-Latin/emoji text."""
+        if not text:
+            return 0.0
+        if self.uses_simple_latin_metrics(text):
+            return self._measure_bundled(text, size)
+
+        total = 0.0
+        run_chars: list[str] = []
+        run_mode: str | None = None  # "bundled" or script name
+
+        def _flush():
+            nonlocal total
+            if not run_chars or run_mode is None:
+                return
+            seg = "".join(run_chars)
+            if run_mode == "bundled":
+                total += self._measure_bundled(seg, size)
+            else:
+                total += self._measure_fallback_segment(seg, run_mode, size)
+            run_chars.clear()
+
+        for ch in text:
+            cp = ord(ch)
+            if ch.isspace() and run_mode is not None:
+                run_chars.append(ch)
+                continue
+            is_emoji = _is_emoji_codepoint(cp)
+            script = _char_script(ch)
+            if is_emoji:
+                mode = "emoji"
+            elif script != "latin":
+                mode = script
+            elif self.has_codepoint(cp):
+                mode = "bundled"
+            else:
+                mode = "fallback_latin"
+            if run_mode != mode:
+                _flush()
+                run_mode = mode
+            run_chars.append(ch)
+        _flush()
+        return total
+
+    def line_metrics(self, text: str, size: float) -> tuple[float, float, int]:
+        """Return (line_height, cap_shift, extra_horizontal_pad) accounting for fallback script ascent/descent."""
+        if self.uses_simple_latin_metrics(text):
+            return self.em(size) * 1.16, self.cap_shift(size), 0
+        # Non-Latin scripts (Devanagari matras above shirorekha, Arabic diacritics) need taller box metrics.
+        return max(self.em(size) * 1.16, size * 1.32), size * 0.04, 8
+
     def cap_shift(self, size):
         """How far below the anchor the middle of a capital letter sits when text is centred on a point."""
         return ((self.asc - self.desc) / 2 - self.cap / 2) * size / (self.asc + self.desc)
 
 
 CAPTION_LEAD = 0.0  # measured: word stamps are within 0.15 s of the voice, so no shift is needed
+
+
 def install_fonts():
-    """Copy the bundled caption fonts next to the data, so captions look the same on every machine and server."""
+    """Copy the bundled caption fonts next to the data directory atomically and thread-safely."""
     try:
-        src = Path(__file__).resolve().parent / "fonts"
-        if src.is_dir():
-            for f in src.glob("*.ttf"):
+        if not BUNDLED_FONTS_DIR.is_dir():
+            return
+        with _fonts_lock:
+            config.FONTS_DIR.mkdir(parents=True, exist_ok=True)
+            for f in BUNDLED_FONTS_DIR.glob("*.ttf"):
                 target = config.FONTS_DIR / f.name
-                if not target.exists():
+                if not target.exists() or target.stat().st_size == 0:
                     try:
-                        shutil.copyfile(f, target)
+                        tmp = config.FONTS_DIR / f".{f.name}.{threading.get_ident()}.tmp"
+                        shutil.copyfile(f, tmp)
+                        tmp.replace(target)
                     except OSError:
                         pass
     except Exception as e:
         print(f"[ClipFlow] Font installation notice: {e}", flush=True)
+
+
+def escape_ffmpeg_filter_value(val: str) -> str:
+    """Escape a path or value for FFmpeg filtergraph options inside -filter_complex.
+
+    FFmpeg parses filter options in two passes (avfilter_graph_parse2 -> av_opt_set_from_string),
+    so pass-2 characters ('\\', ':', '=', '\\'') require two escaping levels while pass-1
+    delimiters (',', ';', '[', ']') require one level.
+    """
+    s = str(val or "")
+    s = s.replace("\\", "\\\\\\\\")
+    s = s.replace(":", "\\\\:")
+    s = s.replace("=", "\\\\=")
+    s = s.replace("'", "\\\\\\'")
+    s = s.replace(",", "\\,")
+    s = s.replace(";", "\\;")
+    s = s.replace("[", "\\[")
+    s = s.replace("]", "\\]")
+    if s.startswith(" "):
+        s = "\\\\\\ " + s[1:]
+    if s.endswith(" "):
+        s = s[:-1] + "\\\\\\ "
+    return s
+
+
+def _safe_work_stem(name: str) -> str:
+    """Sanitize clip stem for temp/output filenames while preserving spaces and Unicode."""
+    cleaned = re.sub(r"[\\/\x00]+", "_", str(name or "")).strip()
+    if not cleaned or cleaned in (".", ".."):
+        return "clip"
+    return cleaned
+
+
+def _required_fonts_for_ass(ass_content: str) -> list[str]:
+    """Identify bundled font filenames needed by the Styles section of an ASS script."""
+    required: list[str] = []
+    for line in (ass_content or "").splitlines():
+        if line.startswith("Style:"):
+            parts = line.split(",", 3)
+            if len(parts) >= 2:
+                font_name = parts[1].strip()
+                ttf = FONT_FILES.get(font_name)
+                if ttf and ttf not in required:
+                    required.append(ttf)
+    if not required:
+        required.extend(FONT_FILES.values())
+    return required
+
+
+def _ensure_render_fonts(dest_fonts_dir: Path, required_fonts: list[str] | None = None) -> list[Path]:
+    """Populate per-job fonts directory from config.FONTS_DIR and bundled fonts, verifying required files exist."""
+    dest_fonts_dir.mkdir(parents=True, exist_ok=True)
+    install_fonts()
+    copied: dict[str, Path] = {}
+    with _fonts_lock:
+        for src_dir in (config.FONTS_DIR, BUNDLED_FONTS_DIR):
+            if not src_dir.is_dir():
+                continue
+            for ext in ("*.ttf", "*.otf"):
+                for font_file in src_dir.glob(ext):
+                    if font_file.is_file() and font_file.stat().st_size > 0 and font_file.name not in copied:
+                        dst = dest_fonts_dir / font_file.name
+                        shutil.copyfile(font_file, dst)
+                        copied[font_file.name] = dst
+
+    if required_fonts:
+        missing = [
+            fname for fname in required_fonts
+            if not (dest_fonts_dir / fname).is_file() or (dest_fonts_dir / fname).stat().st_size == 0
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Render failed: Missing required subtitle font file(s): {', '.join(missing)}. "
+                f"Checked directories: {config.FONTS_DIR}, {BUNDLED_FONTS_DIR}."
+            )
+    return list(copied.values())
+
+
+def _write_android_fontconfig(
+    work: Path,
+    work_fonts_dir: Path,
+    system_fonts_dir: Path | None = None,
+    cache_dir: Path | None = None,
+) -> Path | None:
+    """Create a per-job Fontconfig file on Android pointing libass to job fonts, /system/fonts, and writable cache."""
+    if os.name == "nt" or not _tools.is_android():
+        return None
+    dirs = [str(work_fonts_dir.resolve())]
+    sys_fonts = system_fonts_dir if system_fonts_dir is not None else Path("/system/fonts")
+    if sys_fonts.is_dir() and os.access(sys_fonts, os.R_OK):
+        dirs.append(str(sys_fonts))
+    fc_cache = cache_dir if cache_dir is not None else (work / "fc-cache")
+    fc_cache.mkdir(parents=True, exist_ok=True)
+    conf_path = work / "fonts.conf"
+    dir_xml = "\n".join(f"  <dir>{_xml_escape(d)}</dir>" for d in dirs)
+    cache_xml = f"  <cachedir>{_xml_escape(str(fc_cache.resolve()))}</cachedir>"
+    conf_path.write_text(
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n'
+        + dir_xml + "\n" + cache_xml + "\n</fontconfig>\n",
+        encoding="utf-8",
+    )
+    return conf_path
+
+
+def _build_ffmpeg_subtitle_env(work: Path, conf_path: Path | None) -> dict[str, str] | None:
+    """Build isolated per-subprocess Fontconfig/cache environment without mutating global os.environ."""
+    explicit_override = (os.environ.get("CLIPFLOW_FONTCONFIG_FILE") or "").strip()
+    override_valid = bool(explicit_override and Path(explicit_override).is_file() and os.access(explicit_override, os.R_OK))
+    conf_valid = bool(conf_path is not None and conf_path.is_file())
+    if not conf_valid and not override_valid:
+        stale_fc = (os.environ.get("FONTCONFIG_FILE") or "").strip()
+        if not stale_fc or Path(stale_fc).is_file():
+            return None
+        sub = {k: v for k, v in os.environ.items() if k != "FONTCONFIG_FILE"}
+        fc_home = work / "fc-home"
+        xdg_cache = work / "xdg-cache"
+        fc_home.mkdir(parents=True, exist_ok=True)
+        xdg_cache.mkdir(parents=True, exist_ok=True)
+        sub["HOME"] = str(fc_home.resolve())
+        sub["XDG_CACHE_HOME"] = str(xdg_cache.resolve())
+        return sub
+
+    fc_home = work / "fc-home"
+    xdg_cache = work / "xdg-cache"
+    fc_home.mkdir(parents=True, exist_ok=True)
+    xdg_cache.mkdir(parents=True, exist_ok=True)
+
+    resolved_conf = str(Path(explicit_override).resolve()) if override_valid else str(conf_path.resolve())
+    return {
+        **os.environ,
+        "FONTCONFIG_FILE": resolved_conf,
+        "HOME": str(fc_home.resolve()),
+        "XDG_CACHE_HOME": str(xdg_cache.resolve()),
+    }
 
 
 LAYOUTS = {
@@ -209,8 +654,9 @@ def _hook_events(hook, dur, y, out_w=None, out_h=None):
     if widest > HOOK["max_w"]:
         size = max(40, int(size * HOOK["max_w"] / widest))
         widest = max(f.width(l, size) for l in lines)
-    line_h = f.em(size) * 1.16
-    bw, bh = widest + 2 * HOOK["pad_x"], line_h * len(lines) + 2 * HOOK["pad_y"]
+    line_h, v_shift, pad_x_extra = f.line_metrics(hook, size)
+    bw = widest + 2 * (HOOK["pad_x"] + pad_x_extra)
+    bh = line_h * len(lines) + 2 * HOOK["pad_y"]
     x0, y0, r = (cur_w - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
     x1, y1 = x0 + bw, y0 + bh
     n = lambda v: f"{v:.0f}"                                                         # noqa: E731
@@ -221,7 +667,7 @@ def _hook_events(hook, dur, y, out_w=None, out_h=None):
     span = f"{_ts(0)},{_ts(dur)}"
     ev = [f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\fad(160,0)\\c&H{HOOK['box']}&\\p1}}{box}{{\\p0}}"]
     for i, line in enumerate(lines):
-        cy = y - line_h * (len(lines) - 1) / 2 + i * line_h - f.cap_shift(size)
+        cy = y - line_h * (len(lines) - 1) / 2 + i * line_h - v_shift
         ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({cur_w // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
     return ev
 
@@ -231,7 +677,17 @@ def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, tex
     cur_w = out_w or W
     cur_h = out_h or H
     cap_max_w = int(cur_w * 0.82)
-    words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
+    safe_words = []
+    for w in (words or []):
+        if not isinstance(w, dict) or w.get("w") is None:
+            continue
+        try:
+            ws = float(w.get("s", 0.0))
+            we = max(ws, float(w.get("e", ws)))
+        except (TypeError, ValueError):
+            continue
+        safe_words.append(dict(w, s=ws - CAPTION_LEAD, e=we - CAPTION_LEAD))
+    words = safe_words
     strong = {_key(h) for h in highlight if _key(h)}
     head = f"""[Script Info]
 ScriptType: v4.00+
@@ -248,7 +704,7 @@ Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    dur = end - start
+    dur = max(0.05, float(end) - float(start))
     ev = _hook_events(_clean(hook), dur, hook_y, out_w=cur_w, out_h=cur_h)
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
@@ -266,10 +722,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             t = re.sub(r"[.,;:]+$", "", x["w"])
             texts.append(t.upper() if st["upper"] else t)
         if not all(roman.drawable(t) for t in texts):
-            # A script the caption font cannot draw (Japanese, Thai, Chinese...): its words cannot be measured, so
-            # they are not placed one by one. The line is drawn whole and centred, in a font the system has for it.
+            # Non-Latin scripts (Hindi, Arabic, CJK...): drawn whole-line so Fontconfig + HarfBuzz + FriBidi shape clusters/BiDi cleanly.
             line = " ".join(texts)
-            fs = max(44, min(int(st["size"] * 0.7), int(1500 / max(1, len(line)) * 1.6)))
+            clusters = max(1, _grapheme_cluster_count(line))
+            fs = max(44, min(int(st["size"] * 0.7), int(1500 / clusters * 1.6)))
+            w_est = f.width(line, fs)
+            if w_est > cap_max_w and w_est > 0:
+                fs = max(36, int(fs * cap_max_w / w_est))
             ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({cur_w // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
             continue
         size = st["size"]
@@ -569,8 +1028,16 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                     clip.get("highlight_words", []), hook_y, cap_y, text_overlays=text_overlays, stickers=stickers,
                     out_w=cur_w, out_h=cur_h)
     captions_requested = has_ass_events(ass)
-    # The clip is made in a short work folder and moved into place afterwards.
-    work = Path(tempfile.mkdtemp(prefix="cf"))
+    # The clip is made in an isolated writable work folder and moved into place afterwards.
+    tmp_base = None
+    try:
+        config.TMP_DIR.mkdir(parents=True, exist_ok=True)
+        if os.access(config.TMP_DIR, os.W_OK):
+            tmp_base = str(config.TMP_DIR)
+    except OSError:
+        tmp_base = None
+    safe_prefix = re.sub(r"[^A-Za-z0-9_-]", "_", str(name or "clip"))[:16] or "clip"
+    work = Path(tempfile.mkdtemp(prefix=f"cf_{safe_prefix}_", dir=tmp_base))
     try:
         meta = {"title": clip.get("title") or "", "description": clip.get("description") or "", "comment": clip.get("description") or ""}
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, meta=meta,
@@ -583,23 +1050,38 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, meta=None,
                video_filter=None, volume=1.0, muted=False, out_w=None, out_h=None, captions_requested: bool = True) -> dict:
     global _qsv_ok
-    (work / f"{name}.ass").write_text(ass, encoding="utf-8")
-    (work / "f").mkdir(exist_ok=True)
-    for f in config.FONTS_DIR.glob("*.ttf"):
-        shutil.copyfile(f, work / "f" / f.name)
-
-    ass_ok = _tools.has_ass_filter()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _safe_work_stem(name)
+    ass_path = work / f"{safe_name}.ass"
+    ass_path.write_text(ass, encoding="utf-8")
+    fonts_dir = work / "f"
     has_events = has_ass_events(ass)
-    if ass_ok and has_events:
-        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    elif not ass_ok and has_events:
+    ass_ok = _tools.has_ass_filter()
+
+    if has_events and not ass_ok:
         kinds = _ass_event_kinds(ass)
         items_str = ", ".join(kinds) if kinds else "captions, title hook, text overlays, or stickers"
+        diag = _tools.get_subtitle_diagnostics()
+        missing_str = ", ".join(diag.get("missing_dependencies") or ["libass"])
         raise RuntimeError(
-            "Render failed: Subtitle burning requires FFmpeg with 'ass' filter (libass) support. "
-            f"The bundled FFmpeg binary cannot render burned-in {items_str}. "
-            f"To export this video on Android, please turn off captions and remove any {items_str} in clip settings."
+            f"Render failed: Subtitle burning requires FFmpeg with 'ass' filter (libass) support; "
+            f"cannot render burned-in {items_str}. "
+            f"FFmpeg path: {diag.get('ffmpeg_path')}; version: {diag.get('ffmpeg_version')}; "
+            f"ass filter: {diag.get('ass_filter')}; subtitles filter: {diag.get('subtitles_filter')}; "
+            f"missing: {missing_str}. {diag.get('remediation')}"
         )
+
+    _ensure_render_fonts(fonts_dir, required_fonts=_required_fonts_for_ass(ass) if has_events else None)
+
+    sub_env = None
+    if has_events:
+        if not ass_path.is_file() or ass_path.stat().st_size == 0:
+            raise RuntimeError(f"Render failed: Temporary subtitle file missing or empty: {ass_path}")
+        conf_path = _write_android_fontconfig(work, fonts_dir)
+        sub_env = _build_ffmpeg_subtitle_env(work, conf_path)
+        esc_ass = escape_ffmpeg_filter_value(f"{safe_name}.ass")
+        esc_fonts = escape_ffmpeg_filter_value("f")
+        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + f"[v0]ass={esc_ass}:fontsdir={esc_fonts}[v]"
     else:
         fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + "[v0]copy[v]"
 
@@ -624,8 +1106,10 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         candidates = [c for c in candidates if c[0] != "qsv"]
 
     err = None
+    out_mp4 = f"{safe_name}.mp4"
+    out_jpg = f"{safe_name}.jpg"
     for label, enc in candidates:
-        p = subprocess.run(base + enc + [f"{name}.mp4"], cwd=work, capture_output=True, text=True,
+        p = subprocess.run(base + enc + [out_mp4], cwd=work, env=sub_env, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", creationflags=NO_WINDOW, timeout=RENDER_SECONDS)
         if p.returncode == 0:
             if label == "qsv":
@@ -636,9 +1120,9 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             _qsv_ok = False
     else:
         raise RuntimeError(f"Render failed: {err}")
-    cover_t = min(1.2, (end - start) / 2)
-    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", f"{name}.mp4", "-frames:v", "1",
-         "-q:v", "3", f"{name}.jpg"], cwd=work)
+    cover_t = min(1.2, max(0.1, (end - start) / 2))
+    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", out_mp4, "-frames:v", "1",
+         "-q:v", "3", out_jpg], cwd=work)
     for ext in ("mp4", "jpg", "ass"):
-        shutil.move(str(work / f"{name}.{ext}"), str(out_dir / f"{name}.{ext}"))
-    return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout}
+        shutil.move(str(work / f"{safe_name}.{ext}"), str(out_dir / f"{safe_name}.{ext}"))
+    return {"file": out_mp4, "cover": out_jpg, "layout": layout}

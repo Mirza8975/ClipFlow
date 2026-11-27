@@ -114,6 +114,16 @@ def _startup():
     try:
         if _tools.missing(force=True):
             print("\n  " + _tools.get_help() + "\n", flush=True)
+        sub_diag = _tools.get_subtitle_diagnostics()
+        if not sub_diag.get("supported"):
+            sub_msg = (
+                f"Subtitle filter check failed (path={sub_diag.get('ffmpeg_path')}, "
+                f"version={sub_diag.get('ffmpeg_version')}, ass={sub_diag.get('ass_filter')}, "
+                f"subtitles={sub_diag.get('subtitles_filter')}, "
+                f"missing={sub_diag.get('missing_dependencies')}): {sub_diag.get('remediation')}"
+            )
+            print(f"[ClipFlow] {sub_msg}", flush=True)
+            STARTUP_STATE["warnings"].append(sub_msg)
     except Exception as e:
         msg = f"Tools verification notice: {e}"
         print(f"[ClipFlow] {msg}", flush=True)
@@ -756,6 +766,7 @@ def status(request: Request):
     missing_tools = _tools.missing()
     return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(),
             "no_ffmpeg": bool(missing_tools), "ffmpeg_help": _tools.get_help() if missing_tools else "", "is_android": _tools.is_android(),
+            "subtitle_support": _tools.get_subtitle_diagnostics(),
             "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,

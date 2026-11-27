@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -833,14 +834,29 @@ class TestAndroidBlurAndSubtitleFilterHandling(unittest.TestCase):
         src = work / "dummy.mp4"
         src.write_bytes(b"dummy")
 
-        with patch.object(self.tools, "has_ass_filter", return_value=False):
+        with patch.object(self.tools, "has_ass_filter", return_value=False), \
+             patch.object(self.tools, "get_subtitle_diagnostics", return_value={
+                 "supported": False,
+                 "ffmpeg_path": "/app/lib/libffmpeg.so",
+                 "ffmpeg_version": "ffmpeg version 8.1.1",
+                 "ass_filter": False,
+                 "subtitles_filter": False,
+                 "drawtext_filter": False,
+                 "missing_dependencies": ["FFmpeg 'ass' filter", "libass", "libfreetype"],
+                 "remediation": "Rebuild/repackage the bundled FFmpeg binary with libass support.",
+             }):
             with self.assertRaises(RuntimeError) as ctx:
                 self.render._render_in(
                     work, src, out_dir, "test1", 0.0, 1.0, "blur", 600, ass_content,
                     captions_requested=True
                 )
-            self.assertIn("Subtitle burning requires FFmpeg with 'ass' filter (libass) support", str(ctx.exception))
-            self.assertIn("turn off captions", str(ctx.exception))
+            err_msg = str(ctx.exception)
+            self.assertIn("Subtitle burning requires FFmpeg with 'ass' filter (libass) support", err_msg)
+            self.assertIn("/app/lib/libffmpeg.so", err_msg)
+            self.assertIn("ffmpeg version 8.1.1", err_msg)
+            self.assertIn("ass filter: False", err_msg)
+            self.assertIn("subtitles filter: False", err_msg)
+            self.assertNotIn("turn off captions", err_msg.lower())
 
     def test_subtitle_handling_bypasses_ass_filter_when_captions_disabled(self):
         ass_content = "[Script Info]\n[Events]\nFormat: Layer, Start, End, Style\n"
@@ -871,14 +887,17 @@ class TestAndroidBlurAndSubtitleFilterHandling(unittest.TestCase):
         if not bin_path.is_file():
             self.skipTest("libffmpeg.so not found on disk")
 
-        # 1. Verify filter detection on real binary
+        # 1. Verify filter & subtitle diagnostics on real binary without hardcoded assumptions
         filters = self.tools.get_supported_filters(str(bin_path))
         self.assertIn("avgblur", filters)
         self.assertIn("gblur", filters)
         self.assertNotIn("boxblur", filters)
-        self.assertNotIn("ass", filters)
-        self.assertFalse(self.tools.has_ass_filter(str(bin_path)))
         self.assertEqual(self.tools.get_best_blur_filter(str(bin_path)), "avgblur=sizeX=6:sizeY=6")
+        sub_diag = self.tools.get_subtitle_diagnostics(str(bin_path))
+        self.assertEqual(sub_diag["ffmpeg_path"], str(bin_path))
+        self.assertIn("ffmpeg version", sub_diag["ffmpeg_version"].lower())
+        self.assertEqual(sub_diag["ass_filter"], "ass" in filters)
+        self.assertEqual(sub_diag["subtitles_filter"], "subtitles" in filters)
 
         # 2. Perform real render test with captions=False using actual libffmpeg.so
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -918,12 +937,22 @@ class TestAndroidBlurAndSubtitleFilterHandling(unittest.TestCase):
                 self.assertTrue((out_dir / "clip_real.jpg").is_file())
                 self.assertGreater((out_dir / "clip_real.jpg").stat().st_size, 1000)
 
-                # Test B: Render with captions triggers subtitle error boundary
+                # Test B: Render with captions & title hook — succeeds with libass, or raises structured diagnostics when missing
                 clip_caps = {"start": 0.0, "end": 1.0, "captions": True, "hook": "Android Test", "layout": "blur"}
                 words = [{"w": "Test", "s": 0.1, "e": 0.8}]
-                with self.assertRaises(RuntimeError) as err_ctx:
-                    self.render.render_clip(src_vid, out_dir, "clip_caps", clip_caps, words, 1920, 1080)
-                self.assertIn("Subtitle burning requires FFmpeg with 'ass' filter", str(err_ctx.exception))
+                if sub_diag["supported"]:
+                    res_sub = self.render.render_clip(src_vid, out_dir, "clip_caps", clip_caps, words, 1920, 1080)
+                    self.assertTrue((out_dir / res_sub["file"]).is_file())
+                    self.assertTrue((out_dir / "clip_caps.ass").is_file())
+                else:
+                    self.assertIn("FFmpeg 'ass' filter", sub_diag["missing_dependencies"])
+                    with self.assertRaises(RuntimeError) as err_ctx:
+                        self.render.render_clip(src_vid, out_dir, "clip_caps", clip_caps, words, 1920, 1080)
+                    msg = str(err_ctx.exception)
+                    self.assertIn("Subtitle burning requires FFmpeg with 'ass' filter", msg)
+                    self.assertIn(str(bin_path), msg)
+                    self.assertIn("libass", msg)
+                    self.assertNotIn("turn off captions", msg.lower())
             finally:
                 if old_ffmpeg is not None:
                     os.environ["CLIPFLOW_FFMPEG_PATH"] = old_ffmpeg
@@ -1510,6 +1539,500 @@ console.log("NODE_EDITOR_HELPERS_OK");
         r = subprocess.run([node_bin, "-e", driver], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, f"Node editor test failed:\n{r.stdout}\n{r.stderr}")
         self.assertIn("NODE_EDITOR_HELPERS_OK", r.stdout)
+
+
+class TestSubtitleRenderingPipeline(unittest.TestCase):
+    """Comprehensive Phase 3-5 tests for FFmpeg subtitle capability verification, ASS rendering, path escaping, fonts, concurrency, and A/V sync."""
+
+    def setUp(self):
+        from studio import config, render, tools
+        self.config = config
+        self.render = render
+        self.tools = tools
+
+    def test_capability_detection_never_assumes_ass_on_probe_failure(self):
+        with patch.object(self.tools, "get_supported_filters", return_value=set()), \
+             patch("subprocess.run", side_effect=OSError("cannot execute")):
+            self.assertFalse(self.tools.has_ass_filter("/nonexistent/ffmpeg"))
+            self.assertFalse(self.tools.has_subtitles_filter("/nonexistent/ffmpeg"))
+            diag = self.tools.get_subtitle_diagnostics("/nonexistent/ffmpeg")
+            self.assertFalse(diag["supported"])
+            self.assertEqual(diag["ffmpeg_path"], "/nonexistent/ffmpeg")
+            self.assertEqual(diag["ffmpeg_version"], "unavailable")
+            self.assertFalse(diag["ass_filter"])
+            self.assertFalse(diag["subtitles_filter"])
+            self.assertIn("libass", diag["missing_dependencies"])
+
+        filters_ok = (
+            "Filters:\n"
+            " .. ass               V->V       Render ASS subtitles\n"
+            " .. subtitles         V->V       Render subtitles\n"
+        )
+        ver_ok = "ffmpeg version 8.1.1-libass\nconfiguration: --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz\n"
+        def fake_run(cmd, **kwargs):
+            if "-filters" in cmd:
+                return MagicMock(returncode=0, stdout=filters_ok.encode("utf-8"), stderr=b"")
+            return MagicMock(returncode=0, stdout=ver_ok.encode("utf-8"), stderr=b"")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            self.assertTrue(self.tools.has_ass_filter("/good/ffmpeg"))
+            self.assertTrue(self.tools.has_subtitles_filter("/good/ffmpeg"))
+            diag_ok = self.tools.get_subtitle_diagnostics("/good/ffmpeg")
+            self.assertTrue(diag_ok["supported"])
+            self.assertEqual(diag_ok["ffmpeg_version"], "ffmpeg version 8.1.1-libass")
+            self.assertEqual(diag_ok["missing_dependencies"], [])
+
+    def test_ass_generation_captions_hook_both_and_none(self):
+        words = [{"w": "Hello", "s": 2.1, "e": 2.5}, {"w": "World!", "s": 2.6, "e": 3.1}]
+        ass_caps = self.render.build_ass(words, 2.0, 5.0, "", "bounce", [], 300, 1360)
+        self.assertTrue(self.render.has_ass_events(ass_caps))
+        self.assertEqual(self.render._ass_event_kinds(ass_caps), ["captions"])
+        self.assertIn("Style: Cap,Poppins ExtraBold,132", ass_caps)
+        self.assertIn("HELLO", ass_caps)
+
+        ass_hook = self.render.build_ass([], 2.0, 5.0, "Title Hook Here", "bounce", [], 300, 1360)
+        self.assertTrue(self.render.has_ass_events(ass_hook))
+        self.assertEqual(self.render._ass_event_kinds(ass_hook), ["title hook"])
+        self.assertIn("Title Hook Here", ass_hook)
+
+        ass_both = self.render.build_ass(words, 2.0, 5.0, "Both Hook", "neon", ["world"], 300, 1360)
+        self.assertEqual(self.render._ass_event_kinds(ass_both), ["captions", "title hook"])
+        self.assertIn("Both Hook", ass_both)
+        self.assertIn("Style: Cap,Archivo Black,128", ass_both)
+
+        ass_none = self.render.build_ass([], 2.0, 5.0, "", "bounce", [], 300, 1360)
+        self.assertFalse(self.render.has_ass_events(ass_none))
+        self.assertEqual(self.render._ass_event_kinds(ass_none), [])
+
+        # Guards degenerate end <= start and malformed word dicts
+        ass_safe = self.render.build_ass([{"w": "Safe", "s": "bad"}, {"w": "Ok", "s": 1.0}], 5.0, 5.0, "H", "bounce", [], 300, 1360)
+        self.assertTrue(self.render.has_ass_events(ass_safe))
+
+    def test_subtitle_path_escaping_real_ffmpeg_parser(self):
+        bin_path = Path(__file__).resolve().parent.parent / "android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so"
+        if not bin_path.is_file():
+            self.skipTest("libffmpeg.so not found on disk")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sub = Path(tmp) / " dir with spaces & テスト_🎬 "
+            sub.mkdir()
+            target = sub / "clip:name=[1],semi;q'o=v.txt"
+            escaped = self.render.escape_ffmpeg_filter_value(str(target))
+            fc = f"[0:v]metadata=mode=print:file={escaped}[v]"
+            p = subprocess.run([
+                str(bin_path), "-y", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+                "-filter_complex", fc, "-map", "[v]", "-f", "null", "-"
+            ], capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, f"FFmpeg filtergraph escaping failed: {p.stderr}")
+            self.assertTrue(target.is_file(), "Escaped filter path was not resolved cleanly by libavfilter")
+
+    def test_unicode_and_spaces_paths_and_ass_persistence_during_render(self):
+        words = [{"w": "Unicode", "s": 0.1, "e": 0.4}, {"w": "Caption", "s": 0.5, "e": 0.9}]
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "folder with spaces テスト"
+            base.mkdir()
+            out_dir = base / "out dir 🎬"
+            src = base / "source video [1].mp4"
+            src.write_bytes(b"fake")
+            clip_name = "my clip [1] テスト 'quote'"
+
+            observed = {}
+            def verify_during_ffmpeg(cmd, **kwargs):
+                cwd_p = Path(kwargs["cwd"])
+                ass_f = cwd_p / f"{self.render._safe_work_stem(clip_name)}.ass"
+                observed["ass_exists_during_run"] = ass_f.is_file()
+                observed["ass_size"] = ass_f.stat().st_size if ass_f.is_file() else 0
+                observed["fonts_during_run"] = sorted(p.name for p in (cwd_p / "f").glob("*.ttf"))
+                observed["fc"] = cmd[cmd.index("-filter_complex") + 1]
+                observed["cwd_exists"] = cwd_p.is_dir()
+                observed["cwd_path"] = cwd_p
+                (cwd_p / f"{self.render._safe_work_stem(clip_name)}.mp4").write_bytes(b"mp4")
+                (cwd_p / f"{self.render._safe_work_stem(clip_name)}.jpg").write_bytes(b"jpg")
+                return MagicMock(returncode=0, stderr="")
+
+            with patch.object(self.tools, "has_ass_filter", return_value=True), \
+                 patch.object(self.tools, "get_render_encoder_candidates", return_value=[("mpeg4", ["yuv420p", "-c:v", "mpeg4", "-q:v", "3"])]), \
+                 patch("subprocess.run", side_effect=verify_during_ffmpeg), \
+                 patch("studio.render.run"):
+                res = self.render.render_clip(src, out_dir, clip_name, {
+                    "start": 0.0, "end": 1.0, "captions": True, "hook": "Hook テスト", "layout": "blur"
+                }, words, 1920, 1080)
+
+            self.assertTrue(observed["ass_exists_during_run"])
+            self.assertGreater(observed["ass_size"], 100)
+            self.assertIn("Poppins-ExtraBold.ttf", observed["fonts_during_run"])
+            self.assertIn("ass=", observed["fc"])
+            self.assertIn(r"\[1\]", observed["fc"])
+            self.assertIn(r"\\\'quote\\\'", observed["fc"])
+            self.assertFalse(observed["cwd_path"].exists(), "Temporary work folder must be cleaned up after render")
+            self.assertTrue((out_dir / res["file"]).is_file())
+            self.assertTrue((out_dir / f"{self.render._safe_work_stem(clip_name)}.ass").is_file())
+
+    def test_missing_font_diagnostics_raises_actionable_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "w"
+            work.mkdir()
+            out_dir = Path(tmp) / "out"
+            src = Path(tmp) / "src.mp4"
+            src.write_bytes(b"src")
+            empty_fonts = Path(tmp) / "empty_fonts"
+            empty_fonts.mkdir()
+            ass_caps = self.render.build_ass([{"w": "Hi", "s": 0.1, "e": 0.5}], 0.0, 1.0, "Hook", "bounce", [], 300, 1360)
+
+            with patch.object(self.tools, "has_ass_filter", return_value=True), \
+                 patch.object(self.render, "BUNDLED_FONTS_DIR", empty_fonts), \
+                 patch.object(self.config, "FONTS_DIR", empty_fonts):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.render._render_in(work, src, out_dir, "fmiss", 0.0, 1.0, "blur", 600, ass_caps)
+                self.assertIn("Missing required subtitle font file(s)", str(ctx.exception))
+                self.assertIn("Poppins-ExtraBold.ttf", str(ctx.exception))
+
+    def test_render_failure_cleanup_removes_temp_work_and_leaves_no_partial_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp) / "tmp_root"
+            tmp_root.mkdir()
+            out_dir = Path(tmp) / "out"
+            src = Path(tmp) / "src.mp4"
+            src.write_bytes(b"src")
+            with patch.object(self.config, "TMP_DIR", tmp_root), \
+                 patch.object(self.tools, "has_ass_filter", return_value=True), \
+                 patch.object(self.tools, "get_render_encoder_candidates", return_value=[("mpeg4", ["yuv420p", "-c:v", "mpeg4", "-q:v", "3"])]), \
+                 patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="simulated encoder failure")):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.render.render_clip(src, out_dir, "fail_clip", {
+                        "start": 0.0, "end": 1.0, "captions": True, "hook": "H", "layout": "blur"
+                    }, [{"w": "Hi", "s": 0.1, "e": 0.5}], 1920, 1080)
+                self.assertIn("Render failed: simulated encoder failure", str(ctx.exception))
+            self.assertEqual(list(tmp_root.iterdir()), [], "Failed render left leftover temp directory")
+            self.assertFalse((out_dir / "fail_clip.mp4").exists())
+            self.assertFalse((out_dir / "fail_clip.ass").exists())
+
+    def test_concurrent_independent_render_jobs(self):
+        import concurrent.futures
+        bin_path = Path(__file__).resolve().parent.parent / "android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so"
+        if not bin_path.is_file():
+            self.skipTest("libffmpeg.so not found on disk")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tmp_root = root / "tmp_jobs"
+            tmp_root.mkdir()
+            out_dir = root / "out"
+            src = root / "src.mp4"
+            self.assertEqual(subprocess.run([
+                str(bin_path), "-y",
+                "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+                "-f", "lavfi", "-i", "sine=frequency=600:sample_rate=48000",
+                "-t", "1.0", "-c:v", "mpeg4", "-q:v", "4", "-c:a", "aac", str(src)
+            ], capture_output=True, text=True).returncode, 0)
+
+            old_ff = os.environ.get("CLIPFLOW_FFMPEG_PATH")
+            try:
+                os.environ["CLIPFLOW_FFMPEG_PATH"] = str(bin_path)
+                self.tools.setup(force=True)
+                with patch.object(self.config, "TMP_DIR", tmp_root):
+                    def run_one(idx):
+                        return self.render.render_clip(src, out_dir, f"job_{idx}", {
+                            "start": 0.0, "end": 1.0, "captions": False, "hook": "", "layout": "crop"
+                        }, [], 640, 360)
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                        results = [fut.result() for fut in [pool.submit(run_one, i) for i in range(3)]]
+
+                self.assertEqual([r["file"] for r in results], ["job_0.mp4", "job_1.mp4", "job_2.mp4"])
+                for i in range(3):
+                    self.assertGreater((out_dir / f"job_{i}.mp4").stat().st_size, 1000)
+                    self.assertTrue((out_dir / f"job_{i}.ass").is_file())
+                self.assertEqual(list(tmp_root.iterdir()), [], "Concurrent renders must clean all temp dirs")
+            finally:
+                if old_ff is not None:
+                    os.environ["CLIPFLOW_FFMPEG_PATH"] = old_ff
+                else:
+                    os.environ.pop("CLIPFLOW_FFMPEG_PATH", None)
+                self.tools.setup(force=True)
+
+    def test_real_android_av_sync_and_duration_trimmed_export(self):
+        import re
+        bin_path = Path(__file__).resolve().parent.parent / "android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so"
+        if not bin_path.is_file():
+            self.skipTest("libffmpeg.so not found on disk")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "long_src.mp4"
+            out_dir = root / "out"
+            self.assertEqual(subprocess.run([
+                str(bin_path), "-y",
+                "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                "-t", "3.0", "-c:v", "mpeg4", "-q:v", "3", "-c:a", "aac", str(src)
+            ], capture_output=True, text=True).returncode, 0)
+
+            old_ff = os.environ.get("CLIPFLOW_FFMPEG_PATH")
+            try:
+                os.environ["CLIPFLOW_FFMPEG_PATH"] = str(bin_path)
+                self.tools.setup(force=True)
+                res = self.render.render_clip(src, out_dir, "sync_clip", {
+                    "start": 0.5, "end": 2.5, "captions": False, "hook": "", "layout": "fit"
+                }, [], 1280, 720)
+                out_mp4 = out_dir / res["file"]
+                info = subprocess.run([str(bin_path), "-i", str(out_mp4)], capture_output=True, text=True).stderr
+                dur_m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", info)
+                self.assertIsNotNone(dur_m, f"Missing Duration in ffmpeg -i output: {info}")
+                dur_sec = int(dur_m.group(1)) * 3600 + int(dur_m.group(2)) * 60 + float(dur_m.group(3))
+                self.assertAlmostEqual(dur_sec, 2.0, delta=0.15)
+                self.assertIn("Audio: aac", info)
+                self.assertIn("48000 Hz", info)
+                self.assertIn("30 fps", info)
+            finally:
+                if old_ff is not None:
+                    os.environ["CLIPFLOW_FFMPEG_PATH"] = old_ff
+                else:
+                    os.environ.pop("CLIPFLOW_FFMPEG_PATH", None)
+                self.tools.setup(force=True)
+
+    def test_startup_and_entry_verify_subtitle_capability_and_tmpdir(self):
+        entry_path = Path(__file__).resolve().parent.parent / "android/app/src/main/python/clipflow_entry.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("clipflow_entry_testmod", entry_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "app_data"
+            web_dir = Path(tmp) / "web"
+            web_dir.mkdir()
+            old_env = {k: os.environ.get(k) for k in ("CLIPFLOW_DATA", "PEAKCUT_DATA", "CLIPFLOW_ROOT", "PEAKCUT_ROOT", "TMPDIR", "CLIPFLOW_FFMPEG_DIR", "PEAKCUT_FFMPEG_DIR", "CLIPFLOW_ANDROID")}
+            try:
+                os.environ.pop("TMPDIR", None)
+                mod.setup_environment(str(data_dir), str(web_dir), "")
+                self.assertEqual(Path(os.environ["TMPDIR"]).resolve(), (data_dir / "tmp").resolve())
+                self.assertTrue((data_dir / "tmp").is_dir())
+            finally:
+                for k, v in old_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+        from studio import server
+        diag = self.tools.get_diagnostics()
+        self.assertIn("ffmpeg_version", diag)
+        self.assertIn("subtitle_support", diag)
+        self.assertIn("ass_filter", diag["subtitle_support"])
+        with patch.object(server, "_me", return_value=MagicMock(is_admin=False)), \
+             patch.object(server.auth, "public", return_value={"id": "u1"}), \
+             patch.object(server.load, "disk_full", return_value=False), \
+             patch.object(server.usage, "brief", return_value={}), \
+             patch("studio.notices.unread", return_value=0), \
+             patch.object(server.accounts, "settings", return_value={"tour_done": True}), \
+             patch.object(server.accounts, "youtube_ready", return_value=False), \
+             patch.object(server.accounts, "can_connect", return_value=False), \
+             patch.object(server, "_speech_brief", return_value={}):
+            st = server.status(MagicMock())
+        self.assertIn("subtitle_support", st)
+        self.assertEqual(st["subtitle_support"]["ass_filter"], self.tools.has_ass_filter())
+
+    def test_android_fontconfig_cache_env_overrides_and_concurrency(self):
+        import concurrent.futures
+        import xml.etree.ElementTree as ET
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tmp_root = root / "app_tmp"
+            tmp_root.mkdir()
+            sys_fonts_ok = root / "sys_fonts"
+            sys_fonts_ok.mkdir()
+            missing_sys_fonts = root / "missing_sys_fonts"
+            work1 = root / "w1"
+            work2 = root / "w2"
+            fonts1 = work1 / "f"
+            fonts2 = work2 / "f"
+            fonts1.mkdir(parents=True)
+            fonts2.mkdir(parents=True)
+
+            with patch.object(self.tools, "is_android", return_value=True):
+                conf1 = self.render._write_android_fontconfig(work1, fonts1, system_fonts_dir=sys_fonts_ok)
+                conf2 = self.render._write_android_fontconfig(work2, fonts2, system_fonts_dir=missing_sys_fonts)
+
+            self.assertIsNotNone(conf1)
+            self.assertIsNotNone(conf2)
+            parsed1 = ET.fromstring(conf1.read_text(encoding="utf-8"))
+            dirs1 = [el.text for el in parsed1.findall("dir")]
+            caches1 = [el.text for el in parsed1.findall("cachedir")]
+            self.assertIn(str(fonts1.resolve()), dirs1)
+            self.assertIn(str(sys_fonts_ok), dirs1)
+            self.assertEqual(len(caches1), 1)
+            self.assertEqual(Path(caches1[0]).resolve(), (work1 / "fc-cache").resolve())
+            self.assertTrue(Path(caches1[0]).is_dir())
+            self.assertNotIn("/data/local/tmp", conf1.read_text(encoding="utf-8"))
+
+            parsed2 = ET.fromstring(conf2.read_text(encoding="utf-8"))
+            dirs2 = [el.text for el in parsed2.findall("dir")]
+            self.assertEqual(dirs2, [str(fonts2.resolve())])
+
+            # Stale parent FONTCONFIG_FILE/HOME/XDG_CACHE_HOME must be overridden for FFmpeg subprocess only
+            stale_conf = "/nonexistent/stale/fonts.conf"
+            old_fc = os.environ.get("FONTCONFIG_FILE")
+            old_home = os.environ.get("HOME")
+            old_xdg = os.environ.get("XDG_CACHE_HOME")
+            old_cf_ov = os.environ.get("CLIPFLOW_FONTCONFIG_FILE")
+            try:
+                os.environ["FONTCONFIG_FILE"] = stale_conf
+                os.environ["HOME"] = "/nonexistent/home"
+                os.environ["XDG_CACHE_HOME"] = "/nonexistent/xdg"
+                os.environ["CLIPFLOW_FONTCONFIG_FILE"] = "/nonexistent/override.conf"
+
+                seen_envs = []
+                seen_lock = threading.Lock()
+                def fake_run(cmd, **kwargs):
+                    if "-filter_complex" not in cmd:
+                        return MagicMock(returncode=0, stdout=b" .. avgblur \n .. colorlevels \n .. huesaturation \n", stderr=b"")
+                    cwd_p = Path(kwargs["cwd"])
+                    with seen_lock:
+                        seen_envs.append((cwd_p, dict(kwargs.get("env") or {})))
+                    out_stem = self.render._safe_work_stem(Path(cmd[-1]).stem)
+                    (cwd_p / f"{out_stem}.mp4").write_bytes(b"mp4")
+                    (cwd_p / f"{out_stem}.jpg").write_bytes(b"jpg")
+                    return MagicMock(returncode=0, stderr="")
+
+                src = root / "src.mp4"
+                src.write_bytes(b"src")
+                out_dir = root / "out"
+                with patch.object(self.config, "TMP_DIR", tmp_root), \
+                     patch.object(self.tools, "is_android", return_value=True), \
+                     patch.object(self.tools, "has_ass_filter", return_value=True), \
+                     patch.object(self.tools, "get_render_encoder_candidates", return_value=[("mpeg4", ["yuv420p", "-c:v", "mpeg4", "-q:v", "3"])]), \
+                     patch("subprocess.run", side_effect=fake_run), \
+                     patch("studio.render.run"):
+                    def _job(idx):
+                        return self.render.render_clip(src, out_dir, f"fc_{idx}", {
+                            "start": 0.0, "end": 1.0, "captions": True, "hook": "Cache Test", "layout": "blur"
+                        }, [{"w": "Word", "s": 0.1, "e": 0.5}], 1920, 1080)
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                        futs = [pool.submit(_job, i) for i in range(2)]
+                        for fut in futs:
+                            fut.result()
+
+                self.assertEqual(len(seen_envs), 2)
+                self.assertNotEqual(seen_envs[0][0], seen_envs[1][0])
+                fc_files = set()
+                cache_homes = set()
+                for cwd_p, sub_env in seen_envs:
+                    self.assertTrue(str(cwd_p).startswith(str(tmp_root.resolve())))
+                    self.assertEqual(sub_env["FONTCONFIG_FILE"], str((cwd_p / "fonts.conf").resolve()))
+                    self.assertNotEqual(sub_env["FONTCONFIG_FILE"], stale_conf)
+                    self.assertEqual(sub_env["HOME"], str((cwd_p / "fc-home").resolve()))
+                    self.assertEqual(sub_env["XDG_CACHE_HOME"], str((cwd_p / "xdg-cache").resolve()))
+                    fc_files.add(sub_env["FONTCONFIG_FILE"])
+                    cache_homes.add(sub_env["XDG_CACHE_HOME"])
+                self.assertEqual(len(fc_files), 2)
+                self.assertEqual(len(cache_homes), 2)
+                # Global process os.environ must remain unmutated
+                self.assertEqual(os.environ.get("FONTCONFIG_FILE"), stale_conf)
+                self.assertEqual(os.environ.get("HOME"), "/nonexistent/home")
+                self.assertEqual(os.environ.get("XDG_CACHE_HOME"), "/nonexistent/xdg")
+
+                # Valid explicit CLIPFLOW_FONTCONFIG_FILE override is honored when readable
+                custom_conf = root / "custom_fonts.conf"
+                custom_conf.write_text("<fontconfig></fontconfig>", encoding="utf-8")
+                os.environ["CLIPFLOW_FONTCONFIG_FILE"] = str(custom_conf)
+                sub_env_override = self.render._build_ffmpeg_subtitle_env(work1, conf1)
+                self.assertEqual(sub_env_override["FONTCONFIG_FILE"], str(custom_conf.resolve()))
+
+                # Missing per-job configuration + stale parent FONTCONFIG_FILE clears invalid FONTCONFIG_FILE safely
+                os.environ.pop("CLIPFLOW_FONTCONFIG_FILE", None)
+                sub_env_missing = self.render._build_ffmpeg_subtitle_env(work1, root / "missing_fonts.conf")
+                self.assertIsNotNone(sub_env_missing)
+                self.assertNotIn("FONTCONFIG_FILE", sub_env_missing)
+
+                # clipflow_entry.setup_environment replaces unwritable TMPDIR/HOME/XDG_CACHE_HOME safely
+                import importlib.util
+                entry_path = Path(__file__).resolve().parent.parent / "android/app/src/main/python/clipflow_entry.py"
+                spec = importlib.util.spec_from_file_location("clipflow_entry_fc_test", entry_path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                entry_data = root / "entry_data"
+                entry_web = root / "entry_web"
+                entry_web.mkdir()
+                old_entry_env = {
+                    k: os.environ.get(k)
+                    for k in ("TMPDIR", "CLIPFLOW_DATA", "PEAKCUT_DATA", "CLIPFLOW_ROOT", "PEAKCUT_ROOT", "CLIPFLOW_ANDROID", "CLIPFLOW_HOST", "PEAKCUT_HOST", "CLIPFLOW_PORT", "PEAKCUT_PORT", "CLIPFLOW_ACCOUNTS", "PEAKCUT_ACCOUNTS")
+                }
+                old_sys_path = list(sys.path)
+                try:
+                    os.environ["TMPDIR"] = "/nonexistent/readonly_tmp"
+                    os.environ["HOME"] = "/nonexistent/readonly_home"
+                    os.environ["XDG_CACHE_HOME"] = "/nonexistent/readonly_xdg"
+                    mod.setup_environment(str(entry_data), str(entry_web), "")
+                    self.assertEqual(Path(os.environ["TMPDIR"]).resolve(), (entry_data / "tmp").resolve())
+                    self.assertEqual(Path(os.environ["HOME"]).resolve(), entry_data.resolve())
+                    self.assertEqual(Path(os.environ["XDG_CACHE_HOME"]).resolve(), (entry_data / "tmp" / "cache").resolve())
+                finally:
+                    sys.path[:] = old_sys_path
+                    for k, v in old_entry_env.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+            finally:
+                for k, v in (("FONTCONFIG_FILE", old_fc), ("HOME", old_home), ("XDG_CACHE_HOME", old_xdg), ("CLIPFLOW_FONTCONFIG_FILE", old_cf_ov)):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    def test_unicode_measurement_devanagari_arabic_mixed_and_emoji(self):
+        import re
+        poppins = self.render._Font.get("Poppins ExtraBold")
+        anton = self.render._Font.get("Anton")
+        archivo = self.render._Font.get("Archivo Black")
+
+        # Bundled TTF cmap checks
+        self.assertTrue(poppins.uses_simple_latin_metrics("HELLO WORLD 2026!"))
+        self.assertTrue(anton.uses_simple_latin_metrics("HELLO WORLD"))
+        self.assertTrue(archivo.uses_simple_latin_metrics("HELLO WORLD"))
+        self.assertFalse(anton.supports_text("नमस्ते"))
+        self.assertFalse(poppins.supports_text("مرحبا بكم"))
+        self.assertFalse(poppins.supports_text("GO 🔥"))
+        self.assertFalse(poppins.uses_simple_latin_metrics("नमस्ते दोस्त"))
+
+        # Combining marks and ZWJ emoji clusters should not blow up width like raw len(text)
+        zwj_emoji_w = poppins.width("👨‍👩‍👧", 96)
+        single_emoji_w = poppins.width("🔥", 96)
+        self.assertAlmostEqual(zwj_emoji_w, single_emoji_w, delta=2.0)
+
+        # Non-Latin scripts get taller vertical box metrics than bare Latin cap height
+        _, _, pad_latin = poppins.line_metrics("LATIN HOOK", 96)
+        lh_hi, _, pad_hi = poppins.line_metrics("नमस्ते दोस्त", 96)
+        lh_ar, _, pad_ar = poppins.line_metrics("مرحبا بكم", 96)
+        self.assertEqual(pad_latin, 0)
+        self.assertGreater(pad_hi, 0)
+        self.assertGreater(pad_ar, 0)
+        self.assertGreaterEqual(lh_hi, 96 * 1.3)
+        self.assertGreaterEqual(lh_ar, 96 * 1.3)
+
+        # Devanagari, Arabic, mixed-script, and emoji build_ass generation + hook box sanity
+        for sample_hook in ("नमस्ते दोस्त", "مرحبا بكم", "ClipFlow हिंदी العربية 🔥"):
+            ass_doc = self.render.build_ass(
+                [{"w": "नमस्ते", "s": 0.1, "e": 0.5}, {"w": "World", "s": 0.5, "e": 0.9}, {"w": "مرحبا", "s": 0.9, "e": 1.3}],
+                0.0, 2.0, sample_hook, "hype", [], 300, 1360,
+                text_overlays=[{"text": "हिंदी Overlay 🎉", "x": 50, "y": 25, "start": 0.0, "end": 1.5}],
+                stickers=[{"emoji": "🔥", "x": 80, "y": 20, "start": 0.0, "end": 1.5}],
+            )
+            hook_lines = [ln for ln in ass_doc.splitlines() if ln.startswith("Dialogue: 4,") and ",Hook," in ln]
+            joined_hook = " ".join(ln.split("}")[-1] for ln in hook_lines)
+            self.assertEqual(joined_hook, sample_hook)
+            self.assertIn("हिंदी Overlay 🎉", ass_doc)
+            self.assertIn("🔥", ass_doc)
+            # Whole-line caption fallback preserves cursive/BiDi & conjunct words together
+            self.assertIn(r"\q0", ass_doc)
+            box_line = next(ln for ln in ass_doc.splitlines() if "Dialogue: 3," in ln and r"\p1}" in ln)
+            xs = [int(m) for m in re.findall(r"[mlb]\s+(-?\d+)\s+-?\d+", box_line)]
+            self.assertGreater(max(xs) - min(xs), 100)
+            self.assertLessEqual(max(xs) - min(xs), 1040)
 
 
 if __name__ == "__main__":

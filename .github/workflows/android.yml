@@ -7,6 +7,7 @@ on:
     paths:
       - 'android/**'
       - 'studio/**'
+      - 'tools/**'
       - 'web/**'
       - '.github/workflows/android.yml'
   pull_request:
@@ -14,6 +15,7 @@ on:
     paths:
       - 'android/**'
       - 'studio/**'
+      - 'tools/**'
       - 'web/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
@@ -49,16 +51,89 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      - name: Download Prebuilt ARM64 FFmpeg & FFprobe
+      - name: Resolve Android NDK Metadata
+        id: ndk-meta
         run: |
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          curl -fL --retry 3 --retry-delay 2 \
-            -o android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so \
-            https://raw.githubusercontent.com/hzw1199/Android-FFmpeg-Prebuilt/main/ffmpeg-8.1.1/bin/ffmpeg
-          curl -fL --retry 3 --retry-delay 2 \
-            -o android/app/src/main/jniLibs/arm64-v8a/libffprobe.so \
-            https://raw.githubusercontent.com/hzw1199/Android-FFmpeg-Prebuilt/main/ffmpeg-8.1.1/bin/ffprobe
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so android/app/src/main/jniLibs/arm64-v8a/libffprobe.so
+          set -euo pipefail
+          NDK_DIR=""
+          for CANDIDATE in "${ANDROID_NDK_ROOT:-}" "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_LATEST_HOME:-}"; do
+            if [ -n "$CANDIDATE" ] && [ -d "$CANDIDATE/toolchains/llvm/prebuilt" ]; then
+              NDK_DIR="$CANDIDATE"
+              break
+            fi
+          done
+          if [ -z "$NDK_DIR" ] && [ -n "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}" ] && [ -d "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/ndk" ]; then
+            NDK_DIR="$(find "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "ERROR: Android NDK directory not found!" >&2
+            exit 1
+          fi
+          NDK_REV="$(awk -F= '/^Pkg\.Revision/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$NDK_DIR/source.properties" 2>/dev/null || basename "$NDK_DIR")"
+          echo "ndk_dir=$NDK_DIR" >> "$GITHUB_OUTPUT"
+          echo "ndk_revision=${NDK_REV}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Android NDK: $NDK_DIR (Pkg.Revision=${NDK_REV})"
+
+      - name: Cache ARM64 FFmpeg + libass Binaries
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg-arm64
+          key: android-ffmpeg-8.1.1-libass-arm64-${{ runner.os }}-ndk-${{ steps.ndk-meta.outputs.ndk_revision }}-${{ hashFiles('tools/build_android_ffmpeg.sh', '.github/workflows/android.yml') }}
+
+      - name: Build and Verify ARM64 FFmpeg & FFprobe (with libass)
+        run: |
+          set -euo pipefail
+          chmod +x tools/build_android_ffmpeg.sh
+          mkdir -p .cache/ffmpeg-arm64 android/app/src/main/jniLibs/arm64-v8a
+
+          CACHE_VALID=0
+          MANIFEST=".cache/ffmpeg-arm64/ffmpeg-build-manifest.txt"
+          if [ -f .cache/ffmpeg-arm64/libffmpeg.so ] && [ -f .cache/ffmpeg-arm64/libffprobe.so ] && [ -f "$MANIFEST" ]; then
+            CACHED_FFMPEG_SHA=$(sha256sum .cache/ffmpeg-arm64/libffmpeg.so | awk '{print $1}')
+            CACHED_FFPROBE_SHA=$(sha256sum .cache/ffmpeg-arm64/libffprobe.so | awk '{print $1}')
+            if grep -Fq "ffmpeg_commit=239f2c733de417201d7ad3b3b8b0d9b63285b2b1" "$MANIFEST" \
+              && grep -Fq "libpng=1.6.47" "$MANIFEST" \
+              && grep -Fq "libass=0.17.4" "$MANIFEST" \
+              && grep -Fq "libffmpeg_sha256=${CACHED_FFMPEG_SHA}" "$MANIFEST" \
+              && grep -Fq "libffprobe_sha256=${CACHED_FFPROBE_SHA}" "$MANIFEST"; then
+              CACHE_VALID=1
+            else
+              echo "WARNING: Restored cache failed manifest/checksum validation; rebuilding from source."
+            fi
+          fi
+
+          if [ "$CACHE_VALID" -ne 1 ]; then
+            rm -f .cache/ffmpeg-arm64/*
+            sudo apt-get update
+            sudo apt-get install -y ninja-build pkg-config gperf xz-utils
+            MESON_REQ="$(mktemp)"
+            cat > "$MESON_REQ" <<'EOF'
+          meson==1.7.2 --hash=sha256:82c6818dc81743c96de3a458f06175776ebfde4081195ea31ea6971838f25e38
+          EOF
+            python3 -m pip install --no-cache-dir --only-binary=meson --require-hashes -r "$MESON_REQ"
+            rm -f "$MESON_REQ"
+            hash -r
+            MESON_VER="$(meson --version)"
+            echo "Verified Meson ${MESON_VER} at $(command -v meson)"
+            python3 - "$MESON_VER" <<'PY'
+          import sys
+          ver = tuple(int(p) for p in sys.argv[1].strip().split(".")[:3])
+          if ver < (1, 6, 0):
+              raise SystemExit(f"ERROR: Fontconfig 2.16.0 requires Meson >= 1.6.0, got {sys.argv[1]}")
+          PY
+            ./tools/build_android_ffmpeg.sh \
+              --output-dir .cache/ffmpeg-arm64 \
+              --manifest "$MANIFEST"
+          else
+            echo "Restored verified cached ARM64 FFmpeg + libass binaries and manifest."
+          fi
+
+          cp -f .cache/ffmpeg-arm64/libffmpeg.so android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          cp -f .cache/ffmpeg-arm64/libffprobe.so android/app/src/main/jniLibs/arm64-v8a/libffprobe.so
+          chmod 0755 android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so android/app/src/main/jniLibs/arm64-v8a/libffprobe.so
+          ./tools/build_android_ffmpeg.sh --verify-only --output-dir android/app/src/main/jniLibs/arm64-v8a
+          cat "$MANIFEST"
           ls -lh android/app/src/main/jniLibs/arm64-v8a/
 
       - name: Build and Verify ARM64 QuickJS-NG
@@ -156,6 +231,75 @@ jobs:
             echo "Building debug APK and unsigned release APK for verification..."
             ./gradlew assembleDebug assembleRelease --stacktrace
           fi
+
+      - name: Verify APK Native Libraries and FFmpeg Packaging
+        run: |
+          set -euo pipefail
+          EXPECTED_FFMPEG_SHA=$(sha256sum android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so | awk '{print $1}')
+          EXPECTED_FFPROBE_SHA=$(sha256sum android/app/src/main/jniLibs/arm64-v8a/libffprobe.so | awk '{print $1}')
+          EXPECTED_QJS_SHA=$(sha256sum android/app/src/main/jniLibs/arm64-v8a/libqjs.so | awk '{print $1}')
+          TMP_UNPACK=$(mktemp -d)
+          trap 'rm -rf "$TMP_UNPACK"' EXIT
+
+          APK_COUNT=0
+          for APK in android/app/build/outputs/apk/debug/*.apk android/app/build/outputs/apk/release/*.apk; do
+            [ -f "$APK" ] || continue
+            APK_COUNT=$((APK_COUNT + 1))
+            echo "Inspecting APK: $APK"
+            unzip -l "$APK" | grep -E "lib/arm64-v8a/|assets/chaquopy/" || true
+            python3 - "$APK" <<'PY'
+import sys, zipfile
+
+required_fonts = {
+    "studio/fonts/Poppins-ExtraBold.ttf",
+    "studio/fonts/Anton-Regular.ttf",
+    "studio/fonts/ArchivoBlack-Regular.ttf",
+}
+found_fonts = set()
+with zipfile.ZipFile(sys.argv[1]) as apk:
+    top_names = apk.namelist()
+    for req in required_fonts:
+        if any(n.endswith(req) for n in top_names):
+            found_fonts.add(req)
+    imy_names = [n for n in top_names if n.startswith("assets/chaquopy/") and n.endswith(".imy")]
+    for imy in imy_names:
+        with zipfile.ZipFile(apk.open(imy)) as inner:
+            inner_names = inner.namelist()
+            for req in required_fonts:
+                if any(f.endswith(req) for f in inner_names):
+                    found_fonts.add(req)
+print(f"Chaquopy bundles in {sys.argv[1]}: {imy_names}, bundled fonts found={sorted(found_fonts)}")
+missing_fonts = sorted(required_fonts - found_fonts)
+if missing_fonts:
+    raise SystemExit(f"ERROR: Missing required bundled subtitle font(s) inside {sys.argv[1]}: {missing_fonts}")
+PY
+            rm -rf "$TMP_UNPACK/ext"
+            unzip -q "$APK" "lib/arm64-v8a/libffmpeg.so" "lib/arm64-v8a/libffprobe.so" "lib/arm64-v8a/libqjs.so" -d "$TMP_UNPACK/ext"
+            APK_FFMPEG_SHA=$(sha256sum "$TMP_UNPACK/ext/lib/arm64-v8a/libffmpeg.so" | awk '{print $1}')
+            APK_FFPROBE_SHA=$(sha256sum "$TMP_UNPACK/ext/lib/arm64-v8a/libffprobe.so" | awk '{print $1}')
+            APK_QJS_SHA=$(sha256sum "$TMP_UNPACK/ext/lib/arm64-v8a/libqjs.so" | awk '{print $1}')
+            if [ "$APK_FFMPEG_SHA" != "$EXPECTED_FFMPEG_SHA" ] || [ "$APK_FFPROBE_SHA" != "$EXPECTED_FFPROBE_SHA" ] || [ "$APK_QJS_SHA" != "$EXPECTED_QJS_SHA" ]; then
+              echo "ERROR: Packaged APK native binary SHA-256 mismatch in $APK!" >&2
+              exit 1
+            fi
+            ./tools/build_android_ffmpeg.sh --verify-only --output-dir "$TMP_UNPACK/ext/lib/arm64-v8a"
+          done
+          if [ "$APK_COUNT" -lt 2 ]; then
+            echo "ERROR: Expected both Debug and Release APKs, found $APK_COUNT" >&2
+            exit 1
+          fi
+          echo "Verified $APK_COUNT APKs package exact ARM64 libffmpeg.so (libass), libffprobe.so, and libqjs.so."
+
+      - name: Upload ARM64 FFmpeg Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipFlow-android-ffmpeg-arm64
+          path: |
+            android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+            android/app/src/main/jniLibs/arm64-v8a/libffprobe.so
+            .cache/ffmpeg-arm64/ffmpeg-build-manifest.txt
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
