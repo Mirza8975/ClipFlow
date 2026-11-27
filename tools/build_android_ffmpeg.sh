@@ -137,13 +137,21 @@ find_readelf() {
 }
 
 assert_defined_symbols() {
+  local nm_flags=(--defined-only -g)
+  local scope_desc="defined global"
+  if [[ "${1:-}" == "--linked-binary" ]]; then
+    # Linked executables downgrade STV_HIDDEN static archive symbols (e.g. Expat XML_ParserCreate) to STB_LOCAL ('t').
+    nm_flags=(--defined-only)
+    scope_desc="defined"
+    shift
+  fi
+  if [[ $# -lt 3 ]]; then
+    echo "ERROR: assert_defined_symbols requires <target> <label> <sym>..." >&2
+    return 1
+  fi
   local target="$1"
   local label="$2"
   shift 2
-  if [[ $# -eq 0 ]]; then
-    echo "ERROR: assert_defined_symbols requires at least one symbol for $label" >&2
-    return 1
-  fi
   if [[ ! -s "$target" ]]; then
     echo "ERROR: Expected binary/archive missing or empty: $target ($label)" >&2
     return 1
@@ -151,7 +159,7 @@ assert_defined_symbols() {
 
   # Capture nm output fully before matching so early grep exits never trigger SIGPIPE under pipefail.
   local sym_dump wanted
-  sym_dump="$("$NM" --defined-only -g "$target")" || {
+  sym_dump="$("$NM" "${nm_flags[@]}" "$target")" || {
     echo "ERROR: Failed to inspect symbols of $label ($target) with $NM" >&2
     return 1
   }
@@ -181,7 +189,7 @@ assert_defined_symbols() {
   ' <<< "$sym_dump")"
 
   if [[ -n "$missing" ]]; then
-    echo "ERROR: $label ($target) missing defined global symbol(s):" >&2
+    echo "ERROR: $label ($target) missing ${scope_desc} symbol(s):" >&2
     while IFS= read -r sym_name; do
       [[ -n "$sym_name" ]] && printf '  - %s\n' "$sym_name" >&2
     done <<< "$missing"
@@ -1078,7 +1086,7 @@ git clone --depth 1 --branch "$FFMPEG_TAG" "$FFMPEG_GIT_URL" "$FFMPEG_SRC"
   done
 
   # Assert static subtitle, font, and PNG emoji dependency symbols in unstripped ffmpeg_g
-  assert_defined_symbols ffmpeg_g "ffmpeg_g" \
+  assert_defined_symbols --linked-binary ffmpeg_g "ffmpeg_g" \
     ass_library_init ass_process_chunk FcInit hb_buffer_create fribidi_get_bidi_types \
     FT_Init_FreeType png_create_read_struct init_linebreak set_linebreaks_utf32 XML_ParserCreate
 
