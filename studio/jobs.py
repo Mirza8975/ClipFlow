@@ -406,6 +406,25 @@ def request_render(jid, cid, changes: dict):
         new["safe_margin"] = DEFAULTS["safe_margin"]
     if "filter" in changes:
         new["filter"] = str(changes["filter"])[:20]
+    if "quality" in changes:
+        if changes["quality"] in (None, ""):
+            new.pop("quality", None)
+            clip.pop("quality", None)
+        else:
+            try:
+                qv = int(float(changes["quality"]))
+                new["quality"] = max(360, min(1080, qv))
+            except (ValueError, TypeError):
+                pass
+    if "fps" in changes and changes["fps"] not in (None, ""):
+        try:
+            fv = int(float(changes["fps"]))
+            new["fps"] = max(15, min(60, fv))
+        except (ValueError, TypeError):
+            pass
+    if "transition" in changes:
+        tv = str(changes["transition"] or "none").lower()
+        new["transition"] = tv if tv in ("none", "fade") else "none"
     if "volume" in changes:
         try:
             new["volume"] = max(0.0, min(3.0, float(changes["volume"])))

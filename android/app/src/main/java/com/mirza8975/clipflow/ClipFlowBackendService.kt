@@ -195,6 +195,7 @@ class ClipFlowBackendService : Service() {
     }
 
     private fun bootPythonBackend() {
+        acquireWakeLock()
         try {
             currentState = BackendState.Starting("Preparing environment and assets...")
             updateNotification("Preparing web assets and studio files...")
@@ -360,13 +361,16 @@ class ClipFlowBackendService : Service() {
 
     private fun acquireWakeLock() {
         try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "ClipFlow:BackendServiceWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire(10 * 60 * 1000L) // 10 minutes timeout per acquisition
+                acquire(30 * 60 * 1000L) // 30 minutes timeout per boot/restart cycle
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not acquire WakeLock", e)

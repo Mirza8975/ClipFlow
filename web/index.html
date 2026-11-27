@@ -1389,6 +1389,20 @@ function ask(title, text, okLabel = "Confirm", danger = false) {
     d.onclose = () => res(d.returnValue === "yes"); d.returnValue = "no"; d.showModal();
   });
 }
+function askText(title, label, initial = "", okLabel = "Save") {
+  return new Promise(res => {
+    const d = $("#formdlg");
+    if (d.open) d.close();
+    d.innerHTML = `<form method="dialog" class="dlg"><h2>${esc(title)}</h2>
+      <label class="f">${esc(label)}<input id="askTextInp" value="${esc(initial)}" maxlength="120" required autofocus></label>
+      <div class="dlg-foot"><button class="btn" value="no" type="submit" formnovalidate>Cancel</button><button class="btn primary" value="yes" type="submit">${esc(okLabel)}</button></div></form>`;
+    const inp = $("#askTextInp");
+    d.onclose = () => res(d.returnValue === "yes" ? (inp?.value || "").trim() : null);
+    d.returnValue = "no";
+    d.showModal();
+    if (inp) { inp.focus(); inp.select(); }
+  });
+}
 
 /* ============================================================ guided tour */
 function startTour() {
@@ -1883,7 +1897,7 @@ function setLang(v) {   // when the creator is changed in the add bar, their lan
   i.value = v; i.parentElement.querySelectorAll("[data-seg]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
 }
 document.addEventListener("change", e => { if (e.target.id === "o_creator") setLang(S.creators.find(x => x.id === e.target.value)?.lang || "en"); });
-const CAP_LOOK = {bounce:{font:"'Archivo Black'", hl:"#FFFF00", up:true}, hype:{font:"Anton", hl:"#FF3C3C", up:true}, clean:{font:"Poppins", hl:"#6BD7FF", up:false, w:800}};
+const CAP_LOOK = {bounce:{font:"'Archivo Black'", hl:"#FFFF00", up:true}, hype:{font:"Anton", hl:"#FF3C3C", up:true}, clean:{font:"Poppins", hl:"#6BD7FF", up:false, w:800}, neon:{font:"'Archivo Black'", hl:"#00FFAA", up:true}, minimal:{font:"Poppins", hl:"#FFE14D", up:false, w:600}};
 function capPrev(k) {
   const s = CAP_LOOK[k] || {font:"inherit", hl:"#FF8B33", up:true};
   const t = s.up ? ["CLIP", "THIS"] : ["Clip", "this"];
@@ -2735,8 +2749,13 @@ const ED = {
   style: "bounce",
   layout: "blur",
   safe_margin: "reels",
+  quality: 1080,
+  fps: 30,
+  transition: "none",
   showSafeGuide: false,
   showFraming: false,
+  facecamDirty: false,
+  wordsDirty: false,
   facecam: [10, 10, 40, 40, 0, 0],
   words: [],
   text_overlays: [],
@@ -2821,8 +2840,8 @@ function getFilterCss(f) {
   }
 }
 
-function pushHistory() {
-  const snapshot = {
+function _edSnap() {
+  return {
     start: ED.start,
     end: ED.end,
     filter: ED.filter,
@@ -2834,12 +2853,20 @@ function pushHistory() {
     ratio: ED.ratio,
     hook: ED.hook,
     safe_margin: ED.safe_margin,
+    quality: ED.quality,
+    fps: ED.fps,
+    transition: ED.transition,
+    facecamDirty: ED.facecamDirty,
+    wordsDirty: ED.wordsDirty,
     facecam: [...ED.facecam],
     text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
     stickers: JSON.parse(JSON.stringify(ED.stickers)),
     words: JSON.parse(JSON.stringify(ED.words))
   };
-  ED.history.push(snapshot);
+}
+
+function pushHistory() {
+  ED.history.push(_edSnap());
   if (ED.history.length > 30) ED.history.shift();
   ED.future = [];
   updateUndoRedoBtns();
@@ -2847,24 +2874,7 @@ function pushHistory() {
 
 function edUndo() {
   if (!ED.history.length) return;
-  const current = {
-    start: ED.start,
-    end: ED.end,
-    filter: ED.filter,
-    volume: ED.volume,
-    muted: ED.muted,
-    style: ED.style,
-    captions: ED.captions,
-    layout: ED.layout,
-    ratio: ED.ratio,
-    hook: ED.hook,
-    safe_margin: ED.safe_margin,
-    facecam: [...ED.facecam],
-    text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
-    stickers: JSON.parse(JSON.stringify(ED.stickers)),
-    words: JSON.parse(JSON.stringify(ED.words))
-  };
-  ED.future.push(current);
+  ED.future.push(_edSnap());
   const prev = ED.history.pop();
   Object.assign(ED, prev);
   updateStagePreview();
@@ -2874,24 +2884,7 @@ function edUndo() {
 
 function edRedo() {
   if (!ED.future.length) return;
-  const current = {
-    start: ED.start,
-    end: ED.end,
-    filter: ED.filter,
-    volume: ED.volume,
-    muted: ED.muted,
-    style: ED.style,
-    captions: ED.captions,
-    layout: ED.layout,
-    ratio: ED.ratio,
-    hook: ED.hook,
-    safe_margin: ED.safe_margin,
-    facecam: [...ED.facecam],
-    text_overlays: JSON.parse(JSON.stringify(ED.text_overlays)),
-    stickers: JSON.parse(JSON.stringify(ED.stickers)),
-    words: JSON.parse(JSON.stringify(ED.words))
-  };
-  ED.history.push(current);
+  ED.history.push(_edSnap());
   const next = ED.future.pop();
   Object.assign(ED, next);
   updateStagePreview();
@@ -2954,7 +2947,8 @@ function resetTrim() {
 }
 
 function addTextOverlay() {
-  ED.text_overlays.push({ text: "Add text here", color: "#ffffff", font_size: 24, rotation: 0, x: 50, y: 30 });
+  const dur = Math.max(1, Math.round((ED.end - ED.start) * 10) / 10);
+  ED.text_overlays.push({ text: "Add text here", color: "#ffffff", font_size: 24, rotation: 0, x: 50, y: 30, start: 0, end: dur });
   pushHistory();
   updateStagePreview();
   drawTabContent();
@@ -2973,6 +2967,7 @@ function updateSticker(i, key, val) {
   if (ED.stickers[i]) {
     ED.stickers[i][key] = val;
     if (key === "scale" && $(`#edStkSz${i}`)) $(`#edStkSz${i}`).textContent = `${Math.round(val * 100)}%`;
+    if (key === "rotation" && $(`#edStkRot${i}`)) $(`#edStkRot${i}`).textContent = `${val}°`;
     updateStagePreview();
   }
 }
@@ -2994,6 +2989,7 @@ function deleteSticker(i) {
 function updateWordText(i, txt, commit = true) {
   if (ED.words[i]) {
     ED.words[i].w = txt;
+    ED.wordsDirty = true;
     updateLiveCaptionsWords($("#edVideo")?.currentTime || 0);
     if (commit) pushHistory();
   }
@@ -3001,6 +2997,7 @@ function updateWordText(i, txt, commit = true) {
 
 function deleteWord(i) {
   ED.words.splice(i, 1);
+  ED.wordsDirty = true;
   pushHistory();
   updateStagePreview();
   drawTabContent();
@@ -3011,6 +3008,7 @@ function addEditorWord() {
   const s = last ? last.e + 0.1 : ED.start;
   const e = s + 0.5;
   ED.words.push({ w: "New", s: Math.round(s * 100) / 100, e: Math.round(e * 100) / 100 });
+  ED.wordsDirty = true;
   pushHistory();
   updateStagePreview();
   drawTabContent();
@@ -3109,28 +3107,39 @@ function updateStagePreview() {
     capBox.style.display = ED.captions ? "flex" : "none";
   }
   updateLiveCaptionsWords(v ? v.currentTime : 0);
-  const ovLayer = $("#edOverlaysLayer");
-  if (ovLayer) {
-    ovLayer.innerHTML = `
-      ${ED.text_overlays.map((t, i) => `
-        <div class="cf-stage-text-item" data-item-id="${i}"
-             style="left:${t.x ?? 50}%; top:${t.y ?? 30}%; font-size:${t.font_size || 24}px; color:${t.color || '#ffffff'}; transform: translate(-50%, -50%) rotate(${t.rotation || 0}deg);">
-          ${esc(t.text || 'Text')}
-        </div>
-      `).join("")}
-      ${ED.stickers.map((s, i) => `
-        <div class="cf-stage-sticker-item" data-item-id="${i}"
-             style="left:${s.x ?? 50}%; top:${s.y ?? 30}%; font-size:${(s.scale || 1) * 32}px; transform: translate(-50%, -50%) rotate(${s.rotation || 0}deg);">
-          ${esc(s.emoji || '🔥')}
-        </div>
-      `).join("")}
-    `;
-  }
   const { winStart, winEnd, winSpan } = trimWindow();
   const trimDur = Math.max(0.1, ED.end - ED.start);
   const origDur = Math.max(0.1, ED.origEnd - ED.origStart);
   const absT = ED.origStart + (v ? v.currentTime : 0);
   const relInTrim = Math.max(0, Math.min(trimDur, absT - ED.start));
+  if (v) {
+    let op = 1;
+    if (ED.transition === "fade" && trimDur > 1.0) {
+      if (relInTrim < 0.35) op = Math.max(0.1, relInTrim / 0.35);
+      else if (trimDur - relInTrim < 0.35) op = Math.max(0.1, (trimDur - relInTrim) / 0.35);
+    }
+    v.style.opacity = op;
+  }
+  const ovLayer = $("#edOverlaysLayer");
+  if (ovLayer) {
+    const playing = Boolean(v && !v.paused);
+    const isVis = o => (o.start == null || relInTrim >= Number(o.start) - 0.05) && (!o.end || Number(o.end) <= 0 || relInTrim <= Number(o.end) + 0.05);
+    const visCss = o => isVis(o) ? "" : (playing ? "display:none;" : "opacity:0.32;border-style:dashed;");
+    ovLayer.innerHTML = `
+      ${ED.text_overlays.map((t, i) => `
+        <div class="cf-stage-text-item" data-item-id="${i}"
+             style="${visCss(t)} left:${t.x ?? 50}%; top:${t.y ?? 30}%; font-size:${t.font_size || 24}px; color:${t.color || '#ffffff'}; transform: translate(-50%, -50%) rotate(${t.rotation || 0}deg);">
+          ${esc(t.text || 'Text')}
+        </div>
+      `).join("")}
+      ${ED.stickers.map((s, i) => `
+        <div class="cf-stage-sticker-item" data-item-id="${i}"
+             style="${visCss(s)} left:${s.x ?? 50}%; top:${s.y ?? 30}%; font-size:${(s.scale || 1) * 32}px; transform: translate(-50%, -50%) rotate(${s.rotation || 0}deg);">
+          ${esc(s.emoji || '🔥')}
+        </div>
+      `).join("")}
+    `;
+  }
   const timeDisp = $("#edTimeDisplay");
   if (timeDisp) {
     timeDisp.textContent = `${fmt(relInTrim)} / ${fmt(trimDur)}`;
@@ -3334,6 +3343,7 @@ function initStageInteractions() {
     const dyPct = ((e.clientY - startY) / rect.height) * 100;
 
     if (mode === "move_frame") {
+      ED.facecamDirty = true;
       const [ix, iy, iw, ih] = dragState.initBox;
       const nx = Math.max(0, Math.min(100 - iw, ix + dxPct));
       const ny = Math.max(0, Math.min(100 - ih, iy + dyPct));
@@ -3342,6 +3352,7 @@ function initStageInteractions() {
       const fb = $("#edFramingBox");
       if (fb) { fb.style.left = ED.facecam[0] + "%"; fb.style.top = ED.facecam[1] + "%"; }
     } else if (mode === "resize_frame") {
+      ED.facecamDirty = true;
       const [ix, iy, iw, ih] = dragState.initBox;
       if (dragState.type === "br") {
         const nw = Math.max(15, Math.min(100 - ix, iw + dxPct));
@@ -3473,6 +3484,7 @@ function drawTabContent() {
       </div>
     `;
   } else if (t === "text") {
+    const maxD = Math.max(1, Math.round((ED.end - ED.start) * 10) / 10);
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between">
         <b>Text Overlays</b>
@@ -3495,6 +3507,10 @@ function drawTabContent() {
                   <input type="range" min="-180" max="180" value="${to.rotation || 0}" oninput="updateTextOverlay(${i}, 'rotation', Number(this.value))" onchange="pushHistory();">
                 </label>
               </div>
+              <div class="two" style="gap:8px">
+                <label class="f" style="font-size:11px">Show from (s)<input type="number" step="0.5" min="0" max="${maxD}" value="${to.start ?? 0}" onchange="updateTextOverlay(${i}, 'start', Math.max(0, Number(this.value)||0));pushHistory();"></label>
+                <label class="f" style="font-size:11px">Until (s)<input type="number" step="0.5" min="0.5" max="${maxD}" value="${to.end ?? maxD}" onchange="updateTextOverlay(${i}, 'end', Math.max(0.5, Number(this.value)||${maxD}));pushHistory();"></label>
+              </div>
             </div>
           `).join("")}
         </div>
@@ -3502,6 +3518,7 @@ function drawTabContent() {
     `;
   } else if (t === "stickers") {
     const STICKERS = ["🔥", "😱", "⚡", "🎯", "🚀", "💥", "👏", "💯", "😂", "👑", "💀", "✨", "🎬", "🍿", "🏆", "💡"];
+    const maxD = Math.max(1, Math.round((ED.end - ED.start) * 10) / 10);
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between">
         <b>Sticker & Emoji Library</b>
@@ -3514,12 +3531,23 @@ function drawTabContent() {
         <div style="margin-top:8px"><b>Active Stickers</b></div>
         <div style="display:flex;flex-direction:column;gap:6px">
           ${ED.stickers.map((s, i) => `
-            <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.05);padding:6px 8px;border-radius:6px">
-              <span style="font-size:20px">${esc(s.emoji)}</span>
-              <label class="f" style="flex:1;font-size:11px;margin:0"><span>Size: <span id="edStkSz${i}">${Math.round((s.scale || 1) * 100)}%</span></span>
-                <input type="range" min="0.5" max="2.5" step="0.1" value="${s.scale || 1}" oninput="updateSticker(${i}, 'scale', Number(this.value))" onchange="pushHistory();">
-              </label>
-              <button class="btn sm icon ghost" type="button" onclick="deleteSticker(${i})">${ic("trash")}</button>
+            <div style="background:rgba(255,255,255,0.05);padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:20px">${esc(s.emoji)}</span>
+                <label class="f" style="flex:1;font-size:11px;margin:0"><span>Size: <span id="edStkSz${i}">${Math.round((s.scale || 1) * 100)}%</span></span>
+                  <input type="range" min="0.5" max="2.5" step="0.1" value="${s.scale || 1}" oninput="updateSticker(${i}, 'scale', Number(this.value))" onchange="pushHistory();">
+                </label>
+                <button class="btn sm icon ghost" type="button" onclick="deleteSticker(${i})">${ic("trash")}</button>
+              </div>
+              <div class="two" style="gap:8px">
+                <label class="f" style="font-size:11px"><span>Rotation: <span id="edStkRot${i}">${s.rotation || 0}°</span></span>
+                  <input type="range" min="-180" max="180" value="${s.rotation || 0}" oninput="updateSticker(${i}, 'rotation', Number(this.value))" onchange="pushHistory();">
+                </label>
+                <div class="two" style="gap:4px">
+                  <label class="f" style="font-size:11px">From (s)<input type="number" step="0.5" min="0" max="${maxD}" value="${s.start ?? 0}" onchange="updateSticker(${i}, 'start', Math.max(0, Number(this.value)||0));pushHistory();"></label>
+                  <label class="f" style="font-size:11px">To (s)<input type="number" step="0.5" min="0.5" max="${maxD}" value="${s.end ?? maxD}" onchange="updateSticker(${i}, 'end', Math.max(0.5, Number(this.value)||${maxD}));pushHistory();"></label>
+                </div>
+              </div>
             </div>
           `).join("")}
         </div>
@@ -3549,6 +3577,12 @@ function drawTabContent() {
           </div>
         `).join("")}
       </div>
+      <label class="f" style="margin-top:8px">Fade Transition
+        <select onchange="ED.transition=this.value;pushHistory();updateStagePreview();">
+          <option value="none" ${ED.transition !== 'fade' ? 'selected' : ''}>None (Hard Cut)</option>
+          <option value="fade" ${ED.transition === 'fade' ? 'selected' : ''}>Smooth Fade In &amp; Out</option>
+        </select>
+      </label>
     `;
   } else if (t === "audio") {
     const pct = Math.round(ED.volume * 100);
@@ -3615,6 +3649,20 @@ function drawTabContent() {
           ${(ED.layout === "split" || ED.layout === "gameplay" || ED.layout === "pip") ? `<button class="btn sm ${ED.showFraming ? 'primary' : ''}" data-act="toggleframing">${ic("sidebar")} Framing Box</button>` : ""}
         </div>
       </div>
+      <div class="two" style="margin-top:6px">
+        <label class="f">Export Resolution
+          <select onchange="ED.quality=Number(this.value);pushHistory();">
+            <option value="1080" ${Number(ED.quality) !== 720 ? 'selected' : ''}>1080p HD</option>
+            <option value="720" ${Number(ED.quality) === 720 ? 'selected' : ''}>720p Fast</option>
+          </select>
+        </label>
+        <label class="f">Frame Rate
+          <select onchange="ED.fps=Number(this.value);pushHistory();">
+            <option value="30" ${Number(ED.fps) !== 60 ? 'selected' : ''}>30 FPS (Standard)</option>
+            <option value="60" ${Number(ED.fps) === 60 ? 'selected' : ''}>60 FPS (Smooth)</option>
+          </select>
+        </label>
+      </div>
     `;
   } else if (t === "post") {
     panel.innerHTML = `
@@ -3646,17 +3694,24 @@ async function exportClip() {
       style: ED.style,
       layout: ED.layout,
       safe_margin: ED.safe_margin,
+      quality: Number(ED.quality || 1080),
+      fps: Number(ED.fps || 30),
+      transition: ED.transition || "none",
       filter: ED.filter,
       volume: Number(ED.volume),
       muted: Boolean(ED.muted),
-      facecam: pctToSourceFacecam(ED.facecam, ED.srcW, ED.srcH),
-      words: ED.words,
       text_overlays: ED.text_overlays,
       stickers: ED.stickers,
       title: ED.title,
       description: ED.description,
       hashtags: ED.hashtags
     };
+    if (ED.facecamDirty || ["split", "pip", "gameplay"].includes(ED.layout)) {
+      payload.facecam = pctToSourceFacecam(ED.facecam, ED.srcW, ED.srcH);
+    }
+    if (ED.wordsDirty) {
+      payload.words = ED.words;
+    }
     await send(`/api/jobs/${ED.jid}/clips/${ED.cid}/render`, payload);
     toast("Re-making clip with your edits…", "ok");
     $("#clipdlg").close();
@@ -3753,8 +3808,13 @@ function openClip(jid, cid, opts = {}) {
   ED.style = c.style || "bounce";
   ED.layout = c.layout || "blur";
   ED.safe_margin = c.safe_margin || "reels";
+  ED.quality = c.quality || 1080;
+  ED.fps = c.fps || 30;
+  ED.transition = c.transition || "none";
   ED.showSafeGuide = false;
   ED.showFraming = (ED.layout === "split" || ED.layout === "pip" || ED.layout === "gameplay");
+  ED.facecamDirty = false;
+  ED.wordsDirty = false;
   ED.facecam = facecamToPct(c.facecam, ED.srcW, ED.srcH);
   ED.words = [];
   ED.text_overlays = Array.isArray(c.text_overlays) ? JSON.parse(JSON.stringify(c.text_overlays)) : [];
@@ -3800,7 +3860,7 @@ function drawClipDlg(full) {
         <div class="cf-ed-top">
           <div class="cf-ed-top-left">
             <button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button>
-            <div class="cf-ed-title" id="edTitleDisplay" title="${esc(ED.title || 'Untitled Clip')}">${esc(ED.title || 'Untitled Clip')}</div>
+            <div class="cf-ed-title" id="edTitleDisplay" data-act="edrename" title="${esc(ED.title || 'Untitled Clip')} (tap to rename)">${esc(ED.title || 'Untitled Clip')}</div>
           </div>
           <div class="cf-ed-top-right">
             <button class="btn icon ghost" id="edUndoBtn" data-act="edundo" title="Undo" disabled>${ic("undo")}</button>
@@ -3885,9 +3945,14 @@ function drawClipDlg(full) {
   } else if (D.sig !== sig) {
     D.sig = sig;
     const v = $("#edVideo");
-    if (v && c.status === "done" && !v.src.includes(c.file)) {
-      v.src = `${m}${esc(c.file)}?v=${c.version}`;
-      v.poster = `${m}${esc(c.cover)}?v=${c.version}`;
+    const wantSrc = c.status === "done" ? `${m}${c.file}?v=${c.version}` : "";
+    if (c.status === "done" && v && v.getAttribute("src") !== wantSrc) {
+      ED.coverUrl = c.cover ? `${m}${c.cover}?v=${c.version}` : ED.coverUrl;
+      v.src = wantSrc;
+      v.poster = ED.coverUrl;
+      updateStagePreview();
+    } else if (!v || c.status !== "done") {
+      drawClipDlg(true);
     }
   }
 }
@@ -4118,10 +4183,16 @@ document.addEventListener("click", async e => {
     if (a === "playclip") return openClip(d.j, d.c, {autoPlay: true});
     if (a === "shareclip") {
       const j = jobOf(d.j), c = j?.clips.find(x => x.id === d.c);
-      if (c) {
-        const u = `${location.origin}/media/${encodeURIComponent(j.id)}/${encodeURIComponent(c.file)}`;
-        if (navigator.share) {
-          navigator.share({title: c.title || c.hook, text: c.description || "", url: u}).catch(async err => {
+      if (c && c.file) {
+        const u = `${location.origin}/media/${encodeURIComponent(j.id)}/${encodeURIComponent(c.file)}?download=1`;
+        const title = c.title || c.hook || "ClipFlow Clip";
+        const base = (c.title || c.file || "clip").replace(/\.(mp4|mov|webm|mkv)$/i, "").replace(/[^\w.\-]+/g, "_").slice(0, 64) || "clip";
+        const fname = `${base}.mp4`;
+        if (window.ClipFlowAndroid && typeof window.ClipFlowAndroid.shareClip === "function") {
+          window.ClipFlowAndroid.shareClip(u, fname, title);
+          toast("Preparing clip to share…", "ok");
+        } else if (navigator.share) {
+          navigator.share({title, text: c.description || "", url: u}).catch(async err => {
             if (err && err.name === "AbortError") return;
             await copyTextSafe(u); toast("Clip download link copied!", "ok");
           });
@@ -4142,13 +4213,29 @@ document.addEventListener("click", async e => {
       const j = jobOf(d.j), c = j?.clips.find(x => x.id === d.c);
       if (c) {
         const cur = c.title || "";
-        const n = prompt("Rename clip title:", cur);
-        if (n !== null && n.trim() && n.trim() !== cur) {
-          await send(`/api/jobs/${d.j}/clips/${d.c}/rename`, {title: n.trim()}, "PUT");
-          c.title = n.trim();
+        const n = await askText("Rename clip", "Clip title", cur, "Rename");
+        if (n && n !== cur) {
+          await send(`/api/jobs/${d.j}/clips/${d.c}/rename`, {title: n}, "PUT");
+          c.title = n;
           render();
           toast("Clip renamed", "ok");
         }
+      }
+      return;
+    }
+    if (a === "edrename") {
+      const cur = ED.title || "";
+      const n = await askText("Rename clip", "Clip title", cur, "Save");
+      if (n && n !== cur) {
+        ED.title = n;
+        if ($("#edTitleDisplay")) $("#edTitleDisplay").textContent = n;
+        if ($("#edPostTitle")) $("#edPostTitle").value = n;
+        if (ED.jid && ED.cid) {
+          await send(`/api/jobs/${ED.jid}/clips/${ED.cid}/rename`, {title: n}, "PUT").catch(() => {});
+          const c = jobOf(ED.jid)?.clips.find(x => x.id === ED.cid);
+          if (c) c.title = n;
+        }
+        toast("Clip renamed", "ok");
       }
       return;
     }
@@ -4188,7 +4275,8 @@ document.addEventListener("click", async e => {
       return drawTabContent();
     }
     if (a === "edsticker") {
-      ED.stickers.push({emoji: d.e, x: 50, y: 30, scale: 1.0});
+      const dur = Math.max(1, Math.round((ED.end - ED.start) * 10) / 10);
+      ED.stickers.push({emoji: d.e, x: 50, y: 30, scale: 1.0, rotation: 0, start: 0, end: dur});
       pushHistory();
       updateStagePreview();
       return drawTabContent();

@@ -165,15 +165,7 @@ def _patch_yt_dlp_ffmpeg(yt_dlp_mod=None):
 def _ydl(opts):
     import yt_dlp
     _patch_yt_dlp_ffmpeg(yt_dlp)
-    extra = {}
-    ffmpeg_bin = _tools.get_ffmpeg()
-    if ffmpeg_bin and _tools.is_available("ffmpeg"):
-        extra["ffmpeg_location"] = ffmpeg_bin
-
-    # JavaScript runtime configuration for EJS challenge solvers
-    js_runtime = _tools.get_js_runtime()
-    if js_runtime:
-        extra["js_runtimes"] = js_runtime
+    extra = _tools.ydl_runtime_opts()
 
     # Set resilient client priority and extractor arguments for YouTube
     extra["extractor_args"] = {

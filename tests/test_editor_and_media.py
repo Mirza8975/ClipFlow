@@ -31,7 +31,7 @@ if "fastapi" in sys.modules:
             setattr(sys.modules["fastapi"], sub, sys.modules.get(f"fastapi.{sub}", MagicMock()))
     def _pass_thru_decorator(*args, **kwargs):
         return lambda fn: fn
-    for method in ["get", "post", "put", "delete", "patch", "options", "head"]:
+    for method in ["get", "post", "put", "delete", "patch", "options", "head", "api_route"]:
         setattr(sys.modules["fastapi"].FastAPI.return_value, method, _pass_thru_decorator)
 
 import unittest
@@ -2033,6 +2033,185 @@ class TestSubtitleRenderingPipeline(unittest.TestCase):
             xs = [int(m) for m in re.findall(r"[mlb]\s+(-?\d+)\s+-?\d+", box_line)]
             self.assertGreater(max(xs) - min(xs), 100)
             self.assertLessEqual(max(xs) - min(xs), 1040)
+
+
+class TestProductFinishingRegressions(unittest.TestCase):
+    """Verifies QuickJS in live/profiles, export quality/fps/fade options, HEAD routes, and Android/Web wiring."""
+
+    def test_live_and_profiles_use_quickjs_and_ffmpeg_opts(self):
+        from studio import live, profiles
+        mock_ydl_cls = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value.extract_info.return_value = {"is_live": False}
+        rt = {"quickjs": {"path": "/app/lib/libqjs.so"}}
+        with patch("yt_dlp.YoutubeDL", mock_ydl_cls), \
+             patch.object(tools, "get_ffmpeg", return_value="/app/lib/libffmpeg.so"), \
+             patch.object(tools, "is_available", return_value=True), \
+             patch.object(tools, "get_js_runtime", return_value=rt):
+            profiles._ydl_info("https://www.youtube.com/@test")
+            opts_p = mock_ydl_cls.call_args[0][0]
+            self.assertEqual(opts_p["js_runtimes"], rt)
+            self.assertEqual(opts_p["ffmpeg_location"], "/app/lib/libffmpeg.so")
+
+            with self.assertRaises(live.NotLive):
+                live.resolve("https://www.youtube.com/@test/live")
+            opts_l = mock_ydl_cls.call_args[0][0]
+            self.assertEqual(opts_l["js_runtimes"], rt)
+            self.assertEqual(opts_l["ffmpeg_location"], "/app/lib/libffmpeg.so")
+
+    def test_render_quality_fps_fade_and_scaling(self):
+        from studio import render
+        self.assertEqual(render.get_dimensions("blur", 720), (720, 1280))
+        self.assertEqual(render.get_dimensions("landscape", 720), (1280, 720))
+        self.assertEqual(render.get_dimensions("square", 720), (720, 720))
+        self.assertEqual(render.get_dimensions("blur", 1080), (1080, 1920))
+
+        chain = render._filter("blur", 405, out_w=720, out_h=1280, fps=60, transition="fade", duration=5.0)
+        self.assertIn("fps=60", chain)
+        self.assertIn("scale=720:1280", chain)
+        self.assertIn("fade=t=in:st=0:d=0.35,fade=t=out:st=4.65:d=0.35", chain)
+
+        ass_1080 = render.build_ass([{"w": "Hello", "s": 0.1, "e": 0.6}], 0, 2, "HOOK", "bounce", [], 300, 1360)
+        ass_landscape = render.build_ass([{"w": "Hello", "s": 0.1, "e": 0.6}], 0, 2, "HOOK", "bounce", [], 120, 940, out_w=1920, out_h=1080)
+        style_1080 = next(l for l in ass_1080.splitlines() if l.startswith("Style: Cap,"))
+        style_land = next(l for l in ass_landscape.splitlines() if l.startswith("Style: Cap,"))
+        fs_1080 = int(style_1080.split(",")[2])
+        fs_land = int(style_land.split(",")[2])
+        self.assertLess(fs_land, fs_1080)
+
+        # Malformed overlay numeric fields should degrade cleanly instead of raising ValueError
+        ass_resilient = render.build_ass(
+            [], 0, 5, "", "bounce", [], 300, 1360,
+            text_overlays=[{"text": "Safe", "start": "bad", "end": "bad", "rotation": "oops", "font_size": "nan"}],
+            stickers=[{"emoji": "🔥", "scale": "bad", "rotation": "bad"}],
+        )
+        self.assertIn("Safe", ass_resilient)
+        self.assertIn("🔥", ass_resilient)
+
+        # _render_in wires fps and audio afade cleanly when transition='fade'
+        captured_cmds = []
+        with tempfile.TemporaryDirectory() as td:
+            work, out_d = Path(td) / "w", Path(td) / "o"
+            work.mkdir(); out_d.mkdir()
+            src = Path(td) / "s.mp4"; src.write_bytes(b"0")
+            def fake_subproc(cmd, **kw):
+                captured_cmds.append(cmd)
+                (work / "c1.mp4").write_bytes(b"mp4")
+                (work / "c1.jpg").write_bytes(b"jpg")
+                return MagicMock(returncode=0, stderr="")
+            with patch("studio.render.subprocess.run", side_effect=fake_subproc), \
+                 patch("studio.render.run"), \
+                 patch.object(tools, "get_render_encoder_candidates", return_value=[("sw", ["yuv420p", "-c:v", "mpeg4"])]), \
+                 patch.object(tools, "has_ass_filter", return_value=True):
+                (work / "c1.jpg").write_bytes(b"jpg")
+                render._render_in(work, src, out_d, "c1", 0.0, 5.0, "blur", 608, ass_1080, out_w=720, out_h=1280, fps=60, transition="fade")
+            cmd_str = " ".join(captured_cmds[0])
+            self.assertIn("fps=60", cmd_str)
+            self.assertIn("fade=t=in:st=0:d=0.35,fade=t=out:st=4.65:d=0.35", cmd_str)
+            self.assertIn("afade=t=in:st=0:d=0.30,afade=t=out:st=4.70:d=0.30", cmd_str)
+
+    def test_jobs_request_render_preserves_new_export_fields_without_clobbering_words(self):
+        from studio import jobs
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            job = {
+                "id": "job1", "dir": str(d), "user": "u1", "creator": "c1",
+                "title": "Test", "uploader": "Up", "width": 1280, "height": 720,
+                "clips": [{"id": "clip01", "start": 0.0, "end": 10.0, "style": "bounce", "layout": "blur", "status": "done"}],
+            }
+            with patch.dict(jobs._jobs, {"job1": job}), \
+                 patch.object(jobs, "save"), \
+                 patch.object(jobs._q, "put"):
+                jobs.request_render("job1", "clip01", {
+                    "start": 1.0, "end": 9.0, "quality": 720, "fps": 60, "transition": "fade"
+                })
+                c = job["clips"][0]
+                self.assertEqual(c["quality"], 720)
+                self.assertEqual(c["fps"], 60)
+                self.assertEqual(c["transition"], "fade")
+                self.assertFalse(c.get("custom_words", False))
+
+                # Bounds clamping & clearing
+                jobs.request_render("job1", "clip01", {
+                    "quality": 9999, "fps": 200, "transition": "badval"
+                })
+                self.assertEqual(c["quality"], 1080)
+                self.assertEqual(c["fps"], 60)
+                self.assertEqual(c["transition"], "none")
+
+                jobs.request_render("job1", "clip01", {"quality": None})
+                self.assertNotIn("quality", c)
+
+    def test_resolve_zip_clips_validation_and_server_head_route(self):
+        import ast
+        from studio import account, jobs
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "clips"
+            d.mkdir(parents=True)
+            f1 = d / "clip01.mp4"; f1.write_bytes(b"a" * 100)
+            f2 = d / "clip02.mp4"; f2.write_bytes(b"b" * 100)
+            job = {
+                "id": "jzip", "dir": td,
+                "clips": [
+                    {"id": "c1", "title": "My Clip", "status": "done", "file": "clip01.mp4"},
+                    {"id": "c2", "title": "My Clip", "status": "done", "file": "clip02.mp4"},
+                    {"id": "c3", "title": "Still Rendering", "status": "rendering", "file": ""},
+                ],
+            }
+            with patch.object(jobs, "get", return_value=job):
+                resolved = account.resolve_zip_clips([("jzip", "c1"), ("jzip", "c2"), ("jzip", "c3")])
+                self.assertEqual([(p.name, n) for p, n in resolved], [("clip01.mp4", "My Clip.mp4"), ("clip02.mp4", "My Clip (2).mp4")])
+                with self.assertRaises(ValueError):
+                    account.resolve_zip_clips([("jzip", "c3")])
+                with self.assertRaises(ValueError):
+                    account.resolve_zip_clips([("jzip", "c1")], limit_gb=0.00000001)
+
+        root = Path(__file__).resolve().parent.parent
+        tree = ast.parse((root / "studio" / "server.py").read_text(encoding="utf-8"))
+        found = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in ("clips_zip", "media_file"):
+                for dec in node.decorator_list:
+                    if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr == "api_route":
+                        path = ast.literal_eval(dec.args[0]) if dec.args else ""
+                        methods = []
+                        for kw in dec.keywords:
+                            if kw.arg == "methods":
+                                methods = ast.literal_eval(kw.value)
+                        found[node.name] = (path, set(methods))
+        self.assertEqual(found.get("clips_zip"), ("/api/clips.zip", {"GET", "HEAD"}))
+        self.assertEqual(found.get("media_file"), ("/media/{jid}/{name}", {"GET", "HEAD"}))
+
+    def test_web_js_share_and_editor_logic(self):
+        import re
+        root = Path(__file__).resolve().parent.parent
+        html = (root / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function askText(", html)
+        self.assertIn("neon:{font:", html)
+        self.assertIn("minimal:{font:", html)
+        self.assertIn("ED.wordsDirty", html)
+        self.assertIn("ED.facecamDirty", html)
+        self.assertIn("window.ClipFlowAndroid.shareClip", html)
+        self.assertNotIn("prompt(\"Rename clip", html)
+
+        # Validate inline <script> parses cleanly in QuickJS-NG when libqjs.so is present
+        qjs = root / "android" / "app" / "src" / "main" / "jniLibs" / "arm64-v8a" / "libqjs.so"
+        if qjs.is_file() and os.access(qjs, os.X_OK):
+            for s in re.findall(r"<script[^>]*>(.*?)</script>", html, re.S):
+                if not s.strip():
+                    continue
+                with tempfile.NamedTemporaryFile("w", suffix=".js") as tf:
+                    tf.write("if (false) {\n" + s + "\n}")
+                    tf.flush()
+                    proc = subprocess.run([str(qjs), tf.name], capture_output=True, text=True)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        manifest = (root / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        self.assertIn("androidx.core.content.FileProvider", manifest)
+        self.assertTrue((root / "android" / "app" / "src" / "main" / "res" / "xml" / "file_paths.xml").is_file())
+        main_kt = (root / "android" / "app" / "src" / "main" / "java" / "com" / "mirza8975" / "clipflow" / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("ClipFlowAndroidBridge", main_kt)
+        self.assertIn("MediaStore.Downloads", main_kt)
+        self.assertIn("ServerConfigHelper.isLocalEngineUrl", main_kt)
 
 
 if __name__ == "__main__":

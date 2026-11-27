@@ -238,23 +238,36 @@ def is_available(name: str = "ffmpeg") -> bool:
     return name in NEEDED and name not in missing()
 
 
+def _executable_file(p: Path) -> str | None:
+    """Return resolved path string if p is an executable file (chmods user-writable binaries on POSIX if needed)."""
+    if not p.is_file():
+        return None
+    if not os.access(p, os.X_OK):
+        try:
+            p.chmod(p.stat().st_mode | 0o111)
+        except OSError:
+            pass
+    if os.access(p, os.X_OK):
+        return str(p.resolve())
+    return None
+
+
 def get_quickjs() -> str | None:
     """Return the resolved absolute path to the QuickJS executable, or None if unavailable."""
     # 1. Explicit environment variable override
     env_path = os.environ.get("CLIPFLOW_QUICKJS_PATH")
-    if env_path and Path(env_path).is_file() and os.access(env_path, os.X_OK):
-        return str(Path(env_path).resolve())
+    if env_path:
+        resolved = _executable_file(Path(env_path))
+        if resolved:
+            return resolved
 
     exe = ".exe" if sys.platform == "win32" else ""
     # 2. Check Android native library directory and well-known installation folders
     for d in _places():
-        so_bin = d / "libqjs.so"
-        if so_bin.is_file() and os.access(so_bin, os.X_OK):
-            return str(so_bin.resolve())
-        for n in ("qjs", "quickjs"):
-            cand = d / (n + exe)
-            if cand.is_file() and os.access(cand, os.X_OK):
-                return str(cand.resolve())
+        for name in ("libqjs.so", f"qjs{exe}", f"quickjs{exe}"):
+            resolved = _executable_file(d / name)
+            if resolved:
+                return resolved
 
     # 3. System PATH
     for n in ("qjs", "quickjs"):
@@ -287,6 +300,18 @@ def get_js_runtime() -> dict | None:
         return {"node": {"path": node}}
 
     return None
+
+
+def ydl_runtime_opts() -> dict:
+    """Return shared yt-dlp options for bundled FFmpeg and JS challenge runtime."""
+    extra = {}
+    ffmpeg_bin = get_ffmpeg()
+    if ffmpeg_bin and is_available("ffmpeg"):
+        extra["ffmpeg_location"] = ffmpeg_bin
+    js_runtime = get_js_runtime()
+    if js_runtime:
+        extra["js_runtimes"] = js_runtime
+    return extra
 
 
 def get_video_encoders(ffmpeg_bin: str = None) -> set[str]:

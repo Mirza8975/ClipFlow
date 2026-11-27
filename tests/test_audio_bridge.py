@@ -14,6 +14,8 @@ import math
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -242,6 +244,167 @@ class TestModelFilesResolution(unittest.TestCase):
             self.assertIn("decoder", files)
             self.assertNotIn("joiner", files)
             self.assertIn("tokens", files)
+
+
+class TestWhisperTimestampAndConcurrency(unittest.TestCase):
+    """Regression tests for Whisper missing-timestamp synthesis and Android recognizer serialization."""
+
+    def test_whisper_empty_timestamps_synthesized(self):
+        mock_engine = MagicMock()
+        mock_engine.initRecognizer.return_value = True
+        mock_engine.transcribeFloatBytesDetailed.return_value = {
+            "text": "नमस्ते दुनिया",
+            "tokens": ["नम", "स्ते", " ", "दु", "निया"],
+            "timestamps": [],
+        }
+        with patch.dict("sys.modules", {"com.mirza8975.clipflow": MagicMock(SpeechEngine=mock_engine)}):
+            with patch("studio.fetch_model.ensure"), \
+                 patch("studio.fetch_model.folder", return_value=Path("/data/models/hi")), \
+                 patch("studio.transcribe._model_files", return_value={
+                     "encoder": "/data/models/hi/tiny-encoder.onnx",
+                     "decoder": "/data/models/hi/tiny-decoder.onnx",
+                     "tokens": "/data/models/hi/tiny-tokens.txt",
+                 }):
+                rec = transcribe._AndroidRecognizer("hi")
+                toks, ts = rec.decode_pieces([np.zeros(32000, dtype="float32")])[0]
+                self.assertEqual(len(toks), 5)
+                self.assertEqual(len(ts), 5)
+                self.assertEqual(ts, sorted(ts))
+                words = transcribe._words(toks, ts, 0, 32000)
+                self.assertEqual([w["w"] for w in words], ["नमस्ते", "दुनिया"])
+
+    def test_whisper_text_fallback_when_tokens_empty(self):
+        mock_engine = MagicMock()
+        mock_engine.initRecognizer.return_value = True
+        mock_engine.transcribeFloatBytesDetailed.return_value = {
+            "text": "Hello ClipFlow world",
+            "tokens": [],
+            "timestamps": [],
+        }
+        with patch.dict("sys.modules", {"com.mirza8975.clipflow": MagicMock(SpeechEngine=mock_engine)}):
+            with patch("studio.fetch_model.ensure"), \
+                 patch("studio.fetch_model.folder", return_value=Path("/data/models/hi")), \
+                 patch("studio.transcribe._model_files", return_value={
+                     "encoder": "/data/models/hi/tiny-encoder.onnx",
+                     "decoder": "/data/models/hi/tiny-decoder.onnx",
+                     "tokens": "/data/models/hi/tiny-tokens.txt",
+                 }):
+                rec = transcribe._AndroidRecognizer("hi")
+                toks, ts = rec.decode_pieces([np.zeros(32000, dtype="float32")])[0]
+                words = transcribe._words(toks, ts, 0, 32000)
+                self.assertEqual([w["w"] for w in words], ["Hello", "ClipFlow", "world"])
+
+    def test_words_handles_short_timestamps(self):
+        words = transcribe._words(["hello", " world"], [0.15], 0, 32000)
+        self.assertEqual([w["w"] for w in words], ["hello", "world"])
+
+    def test_android_language_switch_reinitializes_singleton(self):
+        mock_engine = MagicMock()
+        mock_engine.initRecognizer.return_value = True
+        mock_engine.transcribeFloatBytesDetailed.return_value = {
+            "text": "ok",
+            "tokens": ["ok"],
+            "timestamps": [0.1],
+        }
+
+        def fake_folder(lang):
+            return Path(f"/data/models/{lang}")
+
+        def fake_files(d):
+            return {
+                "encoder": str(d / "enc.onnx"),
+                "decoder": str(d / "dec.onnx"),
+                "tokens": str(d / "tokens.txt"),
+            }
+
+        with patch.dict("sys.modules", {"com.mirza8975.clipflow": MagicMock(SpeechEngine=mock_engine)}):
+            with patch("studio.fetch_model.ensure"), \
+                 patch("studio.fetch_model.folder", side_effect=fake_folder), \
+                 patch("studio.transcribe._model_files", side_effect=fake_files):
+                rec_hi = transcribe._AndroidRecognizer("hi")
+                rec_en = transcribe._AndroidRecognizer("en")
+                # Decoding on rec_hi after rec_en loaded must re-init recognizer to "hi"
+                rec_hi.decode_pieces([np.zeros(16000, dtype="float32")])
+                langs = [call.args[6] for call in mock_engine.initRecognizer.call_args_list]
+                self.assertEqual(langs, ["hi", "en", "hi"])
+
+    def test_android_reinitializes_when_native_released(self):
+        mock_engine = MagicMock()
+        mock_engine.initRecognizer.return_value = True
+        mock_engine.isModelLoaded.return_value = False
+        mock_engine.transcribeFloatBytesDetailed.return_value = {
+            "text": "recovered",
+            "tokens": ["recovered"],
+            "timestamps": [0.1],
+        }
+        with patch.dict("sys.modules", {"com.mirza8975.clipflow": MagicMock(SpeechEngine=mock_engine)}):
+            with patch("studio.fetch_model.ensure"), \
+                 patch("studio.fetch_model.folder", return_value=Path("/data/models/hi")), \
+                 patch("studio.transcribe._model_files", return_value={
+                     "encoder": "/data/models/hi/tiny-encoder.onnx",
+                     "decoder": "/data/models/hi/tiny-decoder.onnx",
+                     "tokens": "/data/models/hi/tiny-tokens.txt",
+                 }):
+                rec = transcribe._AndroidRecognizer("hi")
+                toks, _ = rec.decode_pieces([np.zeros(16000, dtype="float32")])[0]
+                self.assertEqual(toks, ["recovered"])
+                # Must re-init on decode because native isModelLoaded() returned False
+                self.assertEqual(mock_engine.initRecognizer.call_count, 2)
+
+    def test_android_multithreaded_serialization_never_overlaps(self):
+        in_flight = 0
+        max_in_flight = 0
+        guard = threading.Lock()
+        active_lang = [None]
+        mock_engine = MagicMock()
+        mock_engine.isModelLoaded.return_value = True
+
+        def fake_init(model_dir, is_whisper, enc, dec, joiner, tok, lang_code, threads):
+            nonlocal in_flight, max_in_flight
+            with guard:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            time.sleep(0.005)
+            active_lang[0] = lang_code
+            with guard:
+                in_flight -= 1
+            return True
+
+        def fake_decode(raw_bytes, sr):
+            nonlocal in_flight, max_in_flight
+            with guard:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+                lang = active_lang[0]
+            time.sleep(0.005)
+            with guard:
+                in_flight -= 1
+            return {"text": lang, "tokens": [lang], "timestamps": [0.1]}
+
+        mock_engine.initRecognizer.side_effect = fake_init
+        mock_engine.transcribeFloatBytesDetailed.side_effect = fake_decode
+
+        with patch.dict("sys.modules", {"com.mirza8975.clipflow": MagicMock(SpeechEngine=mock_engine)}):
+            with patch("studio.fetch_model.ensure"), \
+                 patch("studio.fetch_model.folder", side_effect=lambda l: Path(f"/m/{l}")), \
+                 patch("studio.transcribe._model_files", side_effect=lambda d: {
+                     "encoder": str(d / "e.onnx"), "decoder": str(d / "d.onnx"), "tokens": str(d / "t.txt")
+                 }):
+                rec_hi = transcribe._AndroidRecognizer("hi")
+                rec_en = transcribe._AndroidRecognizer("en")
+                out = {"hi": [], "en": []}
+
+                def run_worker(rec, bucket):
+                    for _ in range(5):
+                        res = rec.decode_pieces([np.zeros(8000, dtype="float32")])
+                        bucket.append(res[0][0][0])
+
+                t1 = threading.Thread(target=run_worker, args=(rec_hi, out["hi"]))
+                t2 = threading.Thread(target=run_worker, args=(rec_en, out["en"]))
+                t1.start(); t2.start(); t1.join(); t2.join()
+                self.assertEqual(max_in_flight, 1)
+                self.assertEqual(out["hi"], ["hi"] * 5)
+                self.assertEqual(out["en"], ["en"] * 5)
 
 
 if __name__ == "__main__":

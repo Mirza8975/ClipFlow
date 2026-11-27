@@ -2,21 +2,24 @@ package com.mirza8975.clipflow
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -35,6 +38,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -44,8 +48,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileOutputStream
 import android.util.Log
+import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -115,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etServerUrl: EditText
     private lateinit var btnTestConnection: Button
     private lateinit var btnConnect: Button
+    private var btnUseLocalEngine: Button? = null
     private lateinit var tvStatusMessage: TextView
 
     // Error Views
@@ -130,15 +139,23 @@ class MainActivity : AppCompatActivity() {
     private var lastBackPressTime: Long = 0
     private var currentLoadedUrl: String = ""
 
-    // Dedicated OkHttp client for pre-verifying downloads without following cross-origin redirects
-    private val downloadVerifierClient = OkHttpClient.Builder()
+    private data class PendingDownload(
+        val url: String,
+        val userAgent: String,
+        val contentDisposition: String,
+        val mimetype: String
+    )
+    private var pendingDownload: PendingDownload? = null
+
+    // Dedicated OkHttp client for same-origin downloads/shares without following cross-origin redirects
+    private val downloadStreamClient = OkHttpClient.Builder()
         .followRedirects(false)
         .followSslRedirects(false)
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(4, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    // Activity Result Launcher for Video File Picker
+    // Activity Result Launcher for File Picker
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -159,11 +176,22 @@ class MainActivity : AppCompatActivity() {
         fileUploadCallback = null
     }
 
-    // Permission Launcher for Android 13+ (API 33+) DownloadManager notifications
-    private val notificationPermissionLauncher = registerForActivityResult(
+    private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // DownloadManager continues download regardless of notification permission grant state
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (granted && pending != null) {
+            lifecycleScope.launch {
+                handleFileDownload(pending.url, pending.userAgent, pending.contentDisposition, pending.mimetype)
+            }
+        } else if (!granted && pending != null) {
+            Toast.makeText(
+                this,
+                "Storage permission is required to save clips into Downloads on this Android version",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,7 +216,7 @@ class MainActivity : AppCompatActivity() {
             handleCustomSchemeUri(deepLink)
         } else {
             val savedUrl = serverHelper.getSavedServerUrl()
-            if (savedUrl != null && !savedUrl.contains("127.0.0.1") && !savedUrl.contains("localhost")) {
+            if (savedUrl != null && !ServerConfigHelper.isLocalEngineUrl(savedUrl)) {
                 // User explicitly saved a custom remote server URL
                 connectToServer(savedUrl)
             } else {
@@ -218,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         val savedBase = serverHelper.getSavedServerUrl()?.trim()?.removeSuffix("/") ?: "http://127.0.0.1:8765"
         val targetPath = if (host.isNotEmpty()) "/$host$path" else path
         val fullUrl = "$savedBase$targetPath" + (if (!query.isNullOrEmpty()) "?$query" else "")
-        val isLocal = savedBase.contains("127.0.0.1") || savedBase.contains("localhost")
+        val isLocal = ServerConfigHelper.isLocalEngineUrl(savedBase)
 
         if (isLocal && !ClipFlowBackendService.isServerRunning) {
             startEngineAndConnect(savedBase, loadUrlOverride = fullUrl)
@@ -246,6 +274,7 @@ class MainActivity : AppCompatActivity() {
         etServerUrl = layoutServerConfig.findViewById(R.id.etServerUrl)
         btnTestConnection = layoutServerConfig.findViewById(R.id.btnTestConnection)
         btnConnect = layoutServerConfig.findViewById(R.id.btnConnect)
+        btnUseLocalEngine = layoutServerConfig.findViewById(R.id.btnUseLocalEngine)
         tvStatusMessage = layoutServerConfig.findViewById(R.id.tvStatusMessage)
 
         // Error UI
@@ -284,16 +313,24 @@ class MainActivity : AppCompatActivity() {
             }
 
             serverHelper.saveServerUrl(inputUrl)
-            if (inputUrl.contains("127.0.0.1") || inputUrl.contains("localhost")) {
+            if (ServerConfigHelper.isLocalEngineUrl(inputUrl)) {
                 startEngineAndConnect(inputUrl)
             } else {
                 connectToServer(inputUrl)
             }
         }
 
+        btnUseLocalEngine?.setOnClickListener {
+            val localUrl = "http://127.0.0.1:8765"
+            etServerUrl.setText(localUrl)
+            etServerUrl.setSelection(localUrl.length)
+            serverHelper.saveServerUrl(localUrl)
+            startEngineAndConnect(localUrl)
+        }
+
         btnRetry.setOnClickListener {
             val target = serverHelper.getSavedServerUrl() ?: "http://127.0.0.1:8765"
-            if (target.contains("127.0.0.1") || target.contains("localhost")) {
+            if (ServerConfigHelper.isLocalEngineUrl(target)) {
                 showLoadingScreen("Restarting ClipFlow Studio Engine...")
                 ClipFlowBackendService.restartService(this)
                 startEngineAndConnect(target, isRestart = true)
@@ -449,7 +486,7 @@ class MainActivity : AppCompatActivity() {
         layoutError.visibility = View.VISIBLE
         layoutServerConfig.visibility = View.GONE
         webView.visibility = View.GONE
-        fabSettings.visibility = View.VISIBLE
+        fabSettings.visibility = View.GONE
         progressBar.visibility = View.GONE
         tvErrorDetails.text = details
 
@@ -499,6 +536,9 @@ class MainActivity : AppCompatActivity() {
             cookieManager.setAcceptThirdPartyCookies(webView, false)
         }
 
+        // Expose secure native share bridge strictly validated by page & target origin
+        webView.addJavascriptInterface(ClipFlowAndroidBridge(), "ClipFlowAndroid")
+
         // WebChromeClient: file picker & progress
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -518,23 +558,50 @@ class MainActivity : AppCompatActivity() {
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = filePathCallback
 
+                val videoMimes = arrayOf(
+                    "video/mp4", "video/quicktime", "video/x-matroska", "video/webm",
+                    "video/x-m4v", "video/mp2t", "video/x-flv", "video/3gpp", "video/x-msvideo"
+                )
+                val acceptTypes = fileChooserParams?.acceptTypes
+                    ?.flatMap { it.split(",") }
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() && it != "*/*" }
+                    ?: emptyList()
+                val wantsOnlyVideo = acceptTypes.isEmpty() || acceptTypes.all {
+                    it.startsWith("video/", ignoreCase = true) ||
+                        it.equals(".mp4", ignoreCase = true) ||
+                        it.equals(".mov", ignoreCase = true) ||
+                        it.equals(".mkv", ignoreCase = true) ||
+                        it.equals(".webm", ignoreCase = true)
+                }
+
                 val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "video/*"
                     addCategory(Intent.CATEGORY_OPENABLE)
-                    putExtra(
-                        Intent.EXTRA_MIME_TYPES,
-                        arrayOf(
-                            "video/mp4", "video/quicktime", "video/x-matroska", "video/webm",
-                            "video/x-m4v", "video/mp2t", "video/x-flv", "video/3gpp", "video/x-msvideo"
-                        )
-                    )
+                    if (wantsOnlyVideo) {
+                        type = "video/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, videoMimes)
+                    } else {
+                        type = "*/*"
+                        val resolvedMimes = acceptTypes.map { t ->
+                            when {
+                                t.contains("/") -> t
+                                t.equals(".txt", ignoreCase = true) -> "text/plain"
+                                t.equals(".json", ignoreCase = true) -> "application/json"
+                                t.equals(".jpg", ignoreCase = true) || t.equals(".jpeg", ignoreCase = true) -> "image/jpeg"
+                                t.equals(".png", ignoreCase = true) -> "image/png"
+                                else -> "*/*"
+                            }
+                        }.distinct().toTypedArray()
+                        putExtra(Intent.EXTRA_MIME_TYPES, resolvedMimes)
+                    }
                     if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
                         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                     }
                 }
 
                 try {
-                    filePickerLauncher.launch(Intent.createChooser(intent, "Select Video for ClipFlow"))
+                    val title = if (wantsOnlyVideo) "Select Video for ClipFlow" else "Select File for ClipFlow"
+                    filePickerLauncher.launch(Intent.createChooser(intent, title))
                     return true
                 } catch (e: Exception) {
                     fileUploadCallback = null
@@ -573,8 +640,7 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 val uri = request?.url ?: return null
-                val trustedOriginUri = serverHelper.getSavedServerUri()
-                    ?: currentLoadedUrl.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+                val trustedOriginUri = resolveTrustedUri()
 
                 // Allow http/https, strictly verified same-origin blob: media previews, and safe raster data:image/* thumbnails;
                 // block content://, file://, javascript:, cross-origin blob:, HTML/SVG data:, and unknown schemes.
@@ -595,8 +661,7 @@ class MainActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val targetUri = request?.url ?: return false
                 val scheme = targetUri.scheme?.lowercase() ?: ""
-                val trustedUri = serverHelper.getSavedServerUri()
-                    ?: currentLoadedUrl.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+                val trustedUri = resolveTrustedUri()
 
                 // 1. Handle custom scheme clipflow://
                 if (scheme == "clipflow") {
@@ -646,12 +711,111 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // DownloadListener: Native DownloadManager for MP4 clips with scoped cookies & redirect verification
+        // DownloadListener: direct same-origin streaming to Downloads/ClipFlow with scoped cookies & redirect protection
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             lifecycleScope.launch {
                 handleFileDownload(url, userAgent, contentDisposition, mimetype)
             }
         }
+    }
+
+    private fun resolveTrustedUri(): Uri? {
+        return serverHelper.getSavedServerUri()
+            ?: currentLoadedUrl.takeIf { it.isNotEmpty() }?.let {
+                try { Uri.parse(it) } catch (_: Exception) { null }
+            }
+    }
+
+    private inner class ClipFlowAndroidBridge {
+        @JavascriptInterface
+        fun shareClip(rawUrl: String, fileName: String, title: String) {
+            lifecycleScope.launch {
+                val pageOrigin = withContext(Dispatchers.Main) {
+                    webView.url?.let { try { Uri.parse(it) } catch (_: Exception) { null } }
+                }
+                val trustedUri = resolveTrustedUri()
+                val targetUri = try { Uri.parse(rawUrl) } catch (_: Exception) { null }
+                if (!ServerConfigHelper.isSameOrigin(pageOrigin, trustedUri) ||
+                    !ServerConfigHelper.isSameOrigin(targetUri, trustedUri)
+                ) {
+                    Toast.makeText(this@MainActivity, "Share blocked for untrusted origin", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val ua = withContext(Dispatchers.Main) { webView.settings.userAgentString }
+                downloadAndShareClip(rawUrl, ua, fileName, title)
+            }
+        }
+    }
+
+    private fun sanitizeFileName(raw: String, fallback: String): String {
+        val cleaned = raw.trim().replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1F]+"), "_").trim('.')
+        return if (cleaned.isNotEmpty()) cleaned else fallback
+    }
+
+    private fun extractDispositionFilename(header: String?): String? {
+        if (header.isNullOrBlank()) return null
+        val utf8Match = Regex("filename\\*\\s*=\\s*UTF-8''([^;\\s]+)", RegexOption.IGNORE_CASE).find(header)
+        if (utf8Match != null) {
+            return try {
+                URLDecoder.decode(utf8Match.groupValues[1], "UTF-8")
+            } catch (_: Exception) {
+                utf8Match.groupValues[1]
+            }
+        }
+        val quoted = Regex("filename\\s*=\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(header)
+        if (quoted != null) return quoted.groupValues[1]
+        val plain = Regex("filename\\s*=\\s*([^;\\s]+)", RegexOption.IGNORE_CASE).find(header)
+        return plain?.groupValues?.getOrNull(1)?.trim('"')
+    }
+
+    private fun resolveMimeType(fileName: String, headerContentType: String?, fallbackMime: String): String {
+        val lower = fileName.lowercase()
+        return when {
+            lower.endsWith(".mp4") -> "video/mp4"
+            lower.endsWith(".zip") -> "application/zip"
+            lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> "image/jpeg"
+            !headerContentType.isNullOrBlank() -> headerContentType.substringBefore(';').trim()
+            fallbackMime.isNotBlank() -> fallbackMime
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun executeSameOriginGet(
+        rawUrl: String,
+        userAgent: String,
+        trustedUri: Uri?
+    ): Response {
+        var currentUrl = rawUrl
+        for (hop in 0..1) {
+            val currentUri = Uri.parse(currentUrl)
+            if (!ServerConfigHelper.isSameOrigin(currentUri, trustedUri)) {
+                throw SecurityException("Download blocked: cross-origin redirect detected")
+            }
+            val reqBuilder = Request.Builder().url(currentUrl).get()
+            if (userAgent.isNotBlank()) {
+                reqBuilder.header("User-Agent", userAgent)
+            }
+            val cookies = CookieManager.getInstance().getCookie(currentUrl)
+            if (!cookies.isNullOrEmpty()) {
+                reqBuilder.header("Cookie", cookies)
+            }
+            val resp = downloadStreamClient.newCall(reqBuilder.build()).execute()
+            if (resp.isRedirect) {
+                val loc = resp.header("Location") ?: ""
+                resp.close()
+                if (loc.isBlank() || hop == 1) {
+                    throw SecurityException("Download blocked: unexpected redirect")
+                }
+                val resolved = java.net.URI(currentUrl).resolve(loc).toString()
+                if (!ServerConfigHelper.isSameOrigin(Uri.parse(resolved), trustedUri)) {
+                    throw SecurityException("Download blocked: cross-origin redirect detected")
+                }
+                currentUrl = resolved
+                continue
+            }
+            return resp
+        }
+        throw IllegalStateException("Failed to resolve download")
     }
 
     private suspend fun handleFileDownload(
@@ -668,15 +832,13 @@ class MainActivity : AppCompatActivity() {
 
         val scheme = downloadUri.scheme?.lowercase() ?: ""
         if (scheme != "http" && scheme != "https") {
-            return // Block invalid schemes
+            return
         }
 
-        val trustedUri = serverHelper.getSavedServerUri()
+        val trustedUri = resolveTrustedUri()
         val isSameOrigin = ServerConfigHelper.isSameOrigin(downloadUri, trustedUri)
 
-        // Only allow direct native download if URL originates from the exact trusted server origin
         if (!isSameOrigin) {
-            // For external download links, route securely to system browser without internal session cookies
             if (scheme == "https") {
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, downloadUri))
@@ -687,77 +849,165 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Verify that the destination path belongs to ClipFlow media/clip endpoints
         val path = downloadUri.path ?: ""
         val isClipFlowEndpoint = path.startsWith("/media/") || path.startsWith("/api/clips.zip") || path.endsWith(".mp4")
         if (!isClipFlowEndpoint) {
             return
         }
 
-        // Pre-verify download endpoint with OkHttp (followRedirects = false) to ensure no cross-origin redirect exists
-        val isRedirectSafe = withContext(Dispatchers.IO) {
-            try {
-                val headReq = Request.Builder()
-                    .url(url)
-                    .head()
-                    .build()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                pendingDownload = PendingDownload(url, userAgent, contentDisposition, mimetype)
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
 
-                downloadVerifierClient.newCall(headReq).execute().use { resp ->
-                    if (resp.isRedirect) {
-                        val redirectLocation = resp.header("Location") ?: ""
-                        val redirectUri = Uri.parse(redirectLocation)
-                        // Only safe if redirect target also matches exact same origin
-                        ServerConfigHelper.isSameOrigin(redirectUri, trustedUri)
+        val initialGuess = URLUtil.guessFileName(url, contentDisposition, mimetype).let {
+            if (path.endsWith(".mp4") && !it.endsWith(".mp4", ignoreCase = true)) "$it.mp4" else it
+        }
+        Toast.makeText(this, "${getString(R.string.download_started)} ($initialGuess)", Toast.LENGTH_SHORT).show()
+
+        val result: Result<String> = withContext(Dispatchers.IO) {
+            runCatching {
+                executeSameOriginGet(url, userAgent, trustedUri).use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw IllegalStateException("HTTP ${resp.code}")
+                    }
+                    val body = resp.body ?: throw IllegalStateException("Empty response body")
+                    val serverDisp = resp.header("Content-Disposition")
+                    val rawName = extractDispositionFilename(serverDisp)
+                        ?: extractDispositionFilename(contentDisposition)
+                        ?: initialGuess
+                    val safeName = sanitizeFileName(rawName, if (path.contains("clips.zip")) "clipflow-clips.zip" else "clipflow-clip.mp4")
+                    val finalName = if (path.contains("clips.zip") && !safeName.endsWith(".zip", ignoreCase = true)) {
+                        "$safeName.zip"
+                    } else if (path.endsWith(".mp4") && !safeName.endsWith(".mp4", ignoreCase = true)) {
+                        "$safeName.mp4"
                     } else {
-                        // Direct 200 OK or non-redirect response
-                        resp.code in 200..299
+                        safeName
+                    }
+                    val mime = resolveMimeType(finalName, resp.header("Content-Type"), mimetype)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val resolver = contentResolver
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ClipFlow")
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
+                        val itemUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("Could not create file in Downloads")
+                        try {
+                            resolver.openOutputStream(itemUri)?.use { out ->
+                                body.byteStream().copyTo(out)
+                            } ?: throw IllegalStateException("Could not open Downloads stream")
+                            val readyValues = ContentValues().apply {
+                                put(MediaStore.MediaColumns.IS_PENDING, 0)
+                            }
+                            resolver.update(itemUri, readyValues, null, null)
+                        } catch (t: Throwable) {
+                            resolver.delete(itemUri, null, null)
+                            throw t
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        val dir = File(
+                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                            "ClipFlow"
+                        ).apply { mkdirs() }
+                        var dest = File(dir, finalName)
+                        if (dest.exists()) {
+                            val dot = finalName.lastIndexOf('.')
+                            val stem = if (dot > 0) finalName.substring(0, dot) else finalName
+                            val ext = if (dot > 0) finalName.substring(dot) else ""
+                            var n = 2
+                            while (dest.exists() && n < 100) {
+                                dest = File(dir, "$stem ($n)$ext")
+                                n++
+                            }
+                        }
+                        FileOutputStream(dest).use { out ->
+                            body.byteStream().copyTo(out)
+                        }
+                        MediaScannerConnection.scanFile(
+                            this@MainActivity,
+                            arrayOf(dest.absolutePath),
+                            arrayOf(mime),
+                            null
+                        )
+                    }
+                    finalName
+                }
+            }
+        }
+
+        result.onSuccess { savedName ->
+            Toast.makeText(this, "Saved to Downloads/ClipFlow: $savedName", Toast.LENGTH_LONG).show()
+        }.onFailure { err ->
+            val msg = if (err is SecurityException) {
+                err.message ?: "Download blocked: cross-origin redirect detected"
+            } else {
+                "Download error: ${err.localizedMessage ?: err.message ?: "Failed"}"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private suspend fun downloadAndShareClip(
+        url: String,
+        userAgent: String,
+        fallbackName: String,
+        title: String
+    ) {
+        val trustedUri = resolveTrustedUri()
+        val result: Result<Pair<File, String>> = withContext(Dispatchers.IO) {
+            runCatching {
+                val shareDir = File(cacheDir, "shared_clips").apply { mkdirs() }
+                val cutoff = System.currentTimeMillis() - 60 * 60 * 1000L
+                shareDir.listFiles()?.forEach { f ->
+                    if (f.isFile && f.lastModified() < cutoff) {
+                        f.delete()
                     }
                 }
+                executeSameOriginGet(url, userAgent, trustedUri).use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw IllegalStateException("HTTP ${resp.code}")
+                    }
+                    val body = resp.body ?: throw IllegalStateException("Empty clip response")
+                    val headerName = extractDispositionFilename(resp.header("Content-Disposition"))
+                    val safeName = sanitizeFileName(headerName ?: fallbackName, "clipflow-clip.mp4")
+                    val finalName = if (!safeName.endsWith(".mp4", ignoreCase = true) && url.contains(".mp4")) {
+                        "$safeName.mp4"
+                    } else {
+                        safeName
+                    }
+                    val mime = resolveMimeType(finalName, resp.header("Content-Type"), "video/mp4")
+                    val outFile = File(shareDir, finalName)
+                    FileOutputStream(outFile).use { out ->
+                        body.byteStream().copyTo(out)
+                    }
+                    Pair(outFile, mime)
+                }
+            }
+        }
+
+        result.onSuccess { (file, mime) ->
+            try {
+                val contentUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                    putExtra(Intent.EXTRA_SUBJECT, title.ifBlank { "ClipFlow Clip" })
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(shareIntent, title.ifBlank { "Share Clip" }))
             } catch (e: Exception) {
-                // If HEAD fails (e.g. method not allowed), allow proceeding with strict same-origin guarantee
-                true
+                Toast.makeText(this, "Could not open Android share sheet: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
-        }
-
-        if (!isRedirectSafe) {
-            Toast.makeText(this, "Download blocked: cross-origin redirect detected", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        try {
-            val filename = URLUtil.guessFileName(url, contentDisposition, mimetype).let {
-                if (!it.endsWith(".mp4") && url.contains(".mp4")) "$it.mp4" else it
-            }
-
-            val request = DownloadManager.Request(downloadUri).apply {
-                setMimeType(mimetype.ifEmpty { "video/mp4" })
-
-                // Security: Cookie is attached ONLY because exact same origin and zero cross-origin redirect are proven
-                val cookies = CookieManager.getInstance().getCookie(url)
-                if (!cookies.isNullOrEmpty()) {
-                    addRequestHeader("Cookie", cookies)
-                }
-
-                addRequestHeader("User-Agent", userAgent)
-                setDescription("Downloading ClipFlow vertical video...")
-                setTitle(filename)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ClipFlow/$filename")
-            }
-
-            // Request notification permission on Android 13+ (API 33+) if not yet granted
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
-
-            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(request)
-
-            Toast.makeText(this, "${getString(R.string.download_started)} ($filename)", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Download error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        }.onFailure { err ->
+            Toast.makeText(this, "Share failed: ${err.localizedMessage ?: err.message}", Toast.LENGTH_LONG).show()
         }
     }
 

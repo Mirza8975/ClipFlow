@@ -1274,17 +1274,32 @@ def bulk_delete(body: dict = Body(...)):
     return account.delete_many(vids, _pairs(body.get("clips")))
 
 
-@app.get("/api/clips.zip")
-def clips_zip(ids: str = ""):
+@app.api_route("/api/clips.zip", methods=["GET", "HEAD"])
+def clips_zip(request: Request, ids: str = ""):
     """Many clips as one download. `ids` is video.clip pairs separated by commas."""
-    _throttle("zip:" + ctx.uid(), 12, 600, "Give it a moment: you just downloaded several groups of clips.")
     pairs = _pairs([p.split(".", 1) for p in ids.split(",") if "." in p][:300])
+    fname = f"peakcut-clips-{len(pairs)}.zip"
+    if request.method == "HEAD":
+        try:
+            files = account.resolve_zip_clips(pairs)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return Response(
+            status_code=200,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "private, no-store",
+                "X-Clip-Count": str(len(files)),
+            },
+        )
+    _throttle("zip:" + ctx.uid(), 12, 600, "Give it a moment: you just downloaded several groups of clips.")
     try:
         f = account.zip_clips(pairs)
     except ValueError as e:
         raise HTTPException(400, str(e))
     from starlette.background import BackgroundTask
-    return FileResponse(f, filename=f"peakcut-clips-{len(pairs)}.zip", media_type="application/zip",
+    return FileResponse(f, filename=fname, media_type="application/zip",
                         headers={"Cache-Control": "private, no-store"}, background=BackgroundTask(lambda: f.unlink(missing_ok=True)))
 
 
@@ -1316,7 +1331,7 @@ def delete_my_account(request: Request, body: dict = Body(...)):
     return resp
 
 
-@app.get("/media/{jid}/{name}")
+@app.api_route("/media/{jid}/{name}", methods=["GET", "HEAD"])
 def media_file(jid: str, name: str, download: int = 0):
     if not re.fullmatch(r"[\w\-]+\.(mp4|jpg)", name):
         raise HTTPException(404)

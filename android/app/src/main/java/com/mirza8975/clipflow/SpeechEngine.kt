@@ -82,6 +82,7 @@ object SpeechEngine {
     ): Boolean {
         lock.withLock {
             if (recognizer != null && loadedModelDir == modelDir && loadedLanguage == language) {
+                pendingRelease.set(false)
                 Log.i(TAG, "Model already loaded: $modelDir ($language)")
                 return true
             }

@@ -82,9 +82,8 @@ def clip_title_name(clip: dict, fallback: str = "clip") -> str:
     return "".join(ch if ch.isalnum() or ch in " -_" else "" for ch in text)[:60].strip() or fallback
 
 
-def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
-    """One .zip of finished clips, for downloading many at once. Clips are already compressed, so they are only
-    stored, not squeezed again: making the file is as fast as copying."""
+def resolve_zip_clips(clip_ids: list, limit_gb: float = 4.0) -> list[tuple[Path, str]]:
+    """Resolve and validate finished clip paths and archive filenames for zipping."""
     files, total, seen = [], 0, set()
     for jid, cid in dict.fromkeys(clip_ids):
         job = jobs.get(jid)
@@ -105,6 +104,13 @@ def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
         files.append((f, name))
     if not files:
         raise ValueError("None of those clips are ready to download.")
+    return files
+
+
+def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
+    """One .zip of finished clips, for downloading many at once. Clips are already compressed, so they are only
+    stored, not squeezed again: making the file is as fast as copying."""
+    files = resolve_zip_clips(clip_ids, limit_gb=limit_gb)
     tmp = config.user_dir(ctx.uid()) / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     for old in tmp.glob("clips-*.zip"):                       # leftovers from downloads that were abandoned

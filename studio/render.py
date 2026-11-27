@@ -1,4 +1,5 @@
 """Turns a time range into a vertical clip: 9:16 layout, bouncy word captions, hook title, cover."""
+import math
 import os
 import re
 import shutil
@@ -550,13 +551,35 @@ LAYOUTS = {
 }
 
 
-def get_dimensions(layout: str) -> tuple[int, int]:
-    """Return (width, height) for the target video layout."""
+def get_dimensions(layout: str, quality: int | None = None) -> tuple[int, int]:
+    """Return even (width, height) for the target video layout and optional short-edge quality."""
+    base_w, base_h = getattr(config, "OUT_W", 1080), getattr(config, "OUT_H", 1920)
     if layout == "landscape":
-        return 1920, 1080
-    if layout == "square":
-        return 1080, 1080
-    return getattr(config, "OUT_W", 1080), getattr(config, "OUT_H", 1920)
+        base_w, base_h = 1920, 1080
+    elif layout == "square":
+        base_w, base_h = 1080, 1080
+    if quality is None:
+        return base_w, base_h
+    try:
+        q = max(360, min(1080, int(float(quality))))
+    except (ValueError, TypeError):
+        return base_w, base_h
+    short = min(base_w, base_h)
+    if q == short:
+        return base_w, base_h
+    scale = q / short
+    w = max(2, int(round(base_w * scale / 2)) * 2)
+    h = max(2, int(round(base_h * scale / 2)) * 2)
+    return w, h
+
+
+def _text_scale(cur_w: int, cur_h: int) -> float:
+    """Scale ASS hook/caption typography proportionally for non-1080x1920 resolutions and aspect ratios."""
+    if cur_w == W and cur_h == H:
+        return 1.0
+    if cur_w < cur_h:
+        return max(0.5, min(1.5, cur_w / W))
+    return max(0.5, min(1.0, (cur_h / H) * 1.45))
 
 
 SAFE_MARGINS = {"reels": "Instagram Reels (9:16 safe)", "tiktok": "TikTok (9:16 safe)", "shorts": "YouTube Shorts", "none": "Full Frame (No Margin)"}
@@ -600,23 +623,24 @@ def _groups(words, per):
     return out
 
 
-def geometry(src_w, src_h, layout, safe_margin=None):
+def geometry(src_w, src_h, layout, safe_margin=None, quality=None):
     """Where the video sits in the frame, and where hook and captions go, respecting social safe zones."""
     if layout not in LAYOUTS:
         layout = "blur"
 
-    cur_w, cur_h = get_dimensions(layout)
+    cur_w, cur_h = get_dimensions(layout, quality=quality)
     if layout == "landscape":
         fg_h = cur_h
-        return layout, fg_h, 120, cur_h - 140
+        return layout, fg_h, max(48, int(round(120 * cur_h / 1080))), cur_h - max(60, int(round(140 * cur_h / 1080)))
     if layout == "square":
         fg_h = cur_h
-        return layout, fg_h, 140, cur_h - 160
+        return layout, fg_h, max(56, int(round(140 * cur_h / 1080))), cur_h - max(64, int(round(160 * cur_h / 1080)))
 
+    h_scale = cur_h / 1920.0
     if layout in ("blur", "fit"):
         fg_h = min(cur_h, max(2, int(round(cur_w * src_h / src_w / 2)) * 2))
     elif layout == "zoom":
-        fg_h = 1000
+        fg_h = min(cur_h, max(2, int(round(1000 * h_scale / 2)) * 2))
     else:
         fg_h = cur_h
     top = (cur_h - fg_h) // 2
@@ -632,32 +656,42 @@ def geometry(src_w, src_h, layout, safe_margin=None):
     else:
         safe_top, safe_bottom = 230, 1640
 
+    if cur_h != 1920:
+        safe_top = int(round(safe_top * h_scale))
+        safe_bottom = int(round(safe_bottom * h_scale))
+
     if layout in _FILLS:
-        return layout, fg_h, safe_top + 30, safe_bottom
+        return layout, fg_h, safe_top + int(round(30 * h_scale)), safe_bottom
     if layout == "split":
         return layout, fg_h, safe_top, cur_h // 2        # captions sit on the line between the two people
-    return layout, fg_h, max(safe_top, top - 190), min(safe_bottom, top + fg_h + 180)
+    return layout, fg_h, max(safe_top, top - int(round(190 * h_scale))), min(safe_bottom, top + fg_h + int(round(180 * h_scale)))
 
 
 def _hook_events(hook, dur, y, out_w=None, out_h=None):
     """The heading: dark text in a white rounded box that fits it, on one line or two balanced ones."""
     cur_w = out_w or W
-    f, size = _Font.get(HOOK["font"]), HOOK["size"]
+    cur_h = out_h or H
+    s = _text_scale(cur_w, cur_h)
+    max_w = max(240, int(round(HOOK["max_w"] * (cur_w / W))))
+    f, size = _Font.get(HOOK["font"]), max(30, int(round(HOOK["size"] * s)))
+    pad_x = max(12, int(round(HOOK["pad_x"] * s)))
+    pad_y = max(8, int(round(HOOK["pad_y"] * s)))
+    radius = max(10, int(round(HOOK["radius"] * s)))
     words = hook.split()
     if not words:
         return []
     lines = [" ".join(words)]
-    if f.width(lines[0], size) > HOOK["max_w"] and len(words) > 1:      # two lines, split where they come out most even
+    if f.width(lines[0], size) > max_w and len(words) > 1:      # two lines, split where they come out most even
         cut = min(range(1, len(words)), key=lambda i: max(f.width(" ".join(words[:i]), size), f.width(" ".join(words[i:]), size)))
         lines = [" ".join(words[:cut]), " ".join(words[cut:])]
     widest = max(f.width(l, size) for l in lines)
-    if widest > HOOK["max_w"]:
-        size = max(40, int(size * HOOK["max_w"] / widest))
+    if widest > max_w:
+        size = max(28, int(size * max_w / widest))
         widest = max(f.width(l, size) for l in lines)
     line_h, v_shift, pad_x_extra = f.line_metrics(hook, size)
-    bw = widest + 2 * (HOOK["pad_x"] + pad_x_extra)
-    bh = line_h * len(lines) + 2 * HOOK["pad_y"]
-    x0, y0, r = (cur_w - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
+    bw = widest + 2 * (pad_x + pad_x_extra)
+    bh = line_h * len(lines) + 2 * pad_y
+    x0, y0, r = (cur_w - bw) / 2, y - bh / 2, min(radius, bh / 2)
     x1, y1 = x0 + bw, y0 + bh
     n = lambda v: f"{v:.0f}"                                                         # noqa: E731
     box = (f"m {n(x0 + r)} {n(y0)} l {n(x1 - r)} {n(y0)} b {n(x1)} {n(y0)} {n(x1)} {n(y0)} {n(x1)} {n(y0 + r)} "
@@ -676,6 +710,11 @@ def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, tex
     st = STYLES.get(style_name, STYLES["bounce"])
     cur_w = out_w or W
     cur_h = out_h or H
+    s = _text_scale(cur_w, cur_h)
+    ov_scale = min(cur_w, cur_h) / W
+    cap_size = max(32, int(round(st["size"] * s)))
+    cap_outline = max(2, int(round(st["outline"] * s)))
+    hook_size = max(30, int(round(HOOK["size"] * s)))
     cap_max_w = int(cur_w * 0.82)
     safe_words = []
     for w in (words or []):
@@ -698,8 +737,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{st['font']},{st['size']},&H00{st['base']},&H00{st['base']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{st['outline']},0,5,0,0,0,1
-Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+Style: Cap,{st['font']},{cap_size},&H00{st['base']},&H00{st['base']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{cap_outline},0,5,0,0,0,1
+Style: Hook,{HOOK['font']},{hook_size},&H00{HOOK['ink']},&H00{HOOK['ink']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -725,18 +764,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Non-Latin scripts (Hindi, Arabic, CJK...): drawn whole-line so Fontconfig + HarfBuzz + FriBidi shape clusters/BiDi cleanly.
             line = " ".join(texts)
             clusters = max(1, _grapheme_cluster_count(line))
-            fs = max(44, min(int(st["size"] * 0.7), int(1500 / clusters * 1.6)))
+            fs = max(32, min(int(cap_size * 0.7), int(1500 * s / clusters * 1.6)))
             w_est = f.width(line, fs)
             if w_est > cap_max_w and w_est > 0:
-                fs = max(36, int(fs * cap_max_w / w_est))
+                fs = max(28, int(fs * cap_max_w / w_est))
             ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({cur_w // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
             continue
-        size = st["size"]
-        gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
+        size = cap_size
+        gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * cap_outline + 6) * size / cap_size   # a space, plus room for both outlines
         total = sum(f.width(t, size) for t in texts) + gap * (len(texts) - 1)
         if total > cap_max_w:                                  # a long phrase: shrink it to fit, never run off the frame
-            size = max(36, int(size * cap_max_w / total))
-            gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
+            size = max(28, int(size * cap_max_w / total))
+            gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * cap_outline + 6) * size / cap_size   # a space, plus room for both outlines
             total = sum(f.width(t, size) for t in texts) + gap * (len(texts) - 1)
         cy = cap_y - f.cap_shift(size)
         x = (cur_w - total) / 2
@@ -774,51 +813,61 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             return int(round(total * v / 100.0))
         return int(max(0, min(total, round(v))))
 
+    def _num(val, default: float) -> float:
+        try:
+            fv = float(val)
+            return fv if math.isfinite(fv) else default
+        except (ValueError, TypeError):
+            return default
+
     # Custom text layers
     for item in (text_overlays or []):
+        if not isinstance(item, dict):
+            continue
         t_text = _clean(item.get("text", ""))
         if not t_text:
             continue
-        t_s = max(0.0, float(item.get("start", 0.0)))
-        t_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
+        t_s = max(0.0, _num(item.get("start"), 0.0))
+        raw_te = item.get("end")
+        t_e = min(dur, _num(raw_te, dur)) if raw_te not in (None, "", 0, 0.0) else dur
         if t_e <= t_s:
             t_e = dur
         t_x = _parse_coord(item.get("x"), cur_w)
         t_y = _parse_coord(item.get("y"), cur_h)
         raw_fs = item.get("font_size") if item.get("font_size") is not None else item.get("size", 72)
-        try:
-            fs_val = float(raw_fs)
-        except (ValueError, TypeError):
-            fs_val = 72.0
+        fs_val = max(8.0, _num(raw_fs, 72.0))
         if fs_val <= 64:
-            t_fs = max(24, int(round(fs_val * 2.5)))
+            t_fs = max(20, int(round(fs_val * 2.5 * ov_scale)))
         else:
-            t_fs = max(24, int(round(fs_val)))
+            t_fs = max(20, int(round(fs_val * ov_scale)))
         t_col = str(item.get("color", "FFFFFF")).lstrip("#")
         if len(t_col) == 3:
             t_col = "".join(c * 2 for c in t_col)
         ass_col = f"{t_col[4:6]}{t_col[2:4]}{t_col[0:2]}".upper() if len(t_col) == 6 else "FFFFFF"
-        rot = int(item.get("rotation", 0))
+        rot = int(round(_num(item.get("rotation"), 0.0)))
         rot_tag = f"\\frz{rot}" if rot else ""
         ev.append(f"Dialogue: 5,{_ts(t_s)},{_ts(t_e)},Cap,,0,0,0,,{{\\an5\\pos({t_x},{t_y})\\fs{t_fs}\\c&H{ass_col}&{rot_tag}\\bord3\\3c&H000000&}}{t_text}")
 
     # Stickers / Emojis
     for item in (stickers or []):
+        if not isinstance(item, dict):
+            continue
         s_emoji = _clean(str(item.get("emoji") or item.get("text") or ""))
         if not s_emoji:
             continue
-        s_s = max(0.0, float(item.get("start", 0.0)))
-        s_e = min(dur, float(item.get("end", dur))) if item.get("end") else dur
+        s_s = max(0.0, _num(item.get("start"), 0.0))
+        raw_se = item.get("end")
+        s_e = min(dur, _num(raw_se, dur)) if raw_se not in (None, "", 0, 0.0) else dur
         if s_e <= s_s:
             s_e = dur
         s_x = _parse_coord(item.get("x"), cur_w)
         s_y = _parse_coord(item.get("y"), cur_h)
-        scale = float(item.get("scale", 1.0))
+        scale = max(0.2, min(5.0, _num(item.get("scale"), 1.0)))
         if item.get("size"):
-            s_fs = max(32, int(item.get("size")))
+            s_fs = max(24, int(round(max(8.0, _num(item.get("size"), 96.0)) * ov_scale)))
         else:
-            s_fs = max(32, int(round(96 * scale)))
-        rot = int(item.get("rotation", 0))
+            s_fs = max(24, int(round(96 * scale * ov_scale)))
+        rot = int(round(_num(item.get("rotation"), 0.0)))
         rot_tag = f"\\frz{rot}" if rot else ""
         ev.append(f"Dialogue: 6,{_ts(s_s)},{_ts(s_e)},Cap,,0,0,0,,{{\\an5\\pos({s_x},{s_y})\\fs{s_fs}{rot_tag}}}{s_emoji}")
 
@@ -918,22 +967,34 @@ def _resolve_video_filter(video_filter: str | None) -> str:
     return "huesaturation=saturation=0.25" if has_hs else ""
 
 
-def _filter(layout, fg_h, facecam=None, video_filter=None, out_w=None, out_h=None, blur_filter=None):
+def _filter(layout, fg_h, facecam=None, video_filter=None, out_w=None, out_h=None, blur_filter=None, fps=None, transition=None, duration=None):
     cur_w = out_w or (get_dimensions(layout)[0] if layout in LAYOUTS else W)
     cur_h = out_h or (get_dimensions(layout)[1] if layout in LAYOUTS else H)
+    target_fps = max(15, min(60, int(fps))) if fps else config.OUT_FPS
+    scale_ratio = min(cur_w, cur_h) / W
+    pip_w = max(120, int(round(PIP_W * scale_ratio / 2)) * 2)
+    pip_margin = max(12, int(round(PIP_MARGIN * scale_ratio)))
+    vf_parts = []
     vf = _resolve_video_filter(video_filter)
+    if vf:
+        vf_parts.append(vf)
+    if str(transition or "").lower() == "fade" and duration and float(duration) > 1.0:
+        if not _tools.get_supported_filters() or _tools.has_filter("fade"):
+            fade_out = max(0.0, float(duration) - 0.35)
+            vf_parts.append(f"fade=t=in:st=0:d=0.35,fade=t=out:st={fade_out:.2f}:d=0.35")
+    post_vf = ",".join(vf_parts)
     if layout in ("gameplay", "pip") and facecam:
         fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
         if fw > 8 and fh > 8:
-            pip_h = max(2, int(round(PIP_W * fh / fw)))
-            ox = int(facecam[4]) if len(facecam) >= 6 and int(facecam[4]) > 0 else (cur_w - PIP_W - PIP_MARGIN)
-            oy = int(facecam[5]) if len(facecam) >= 6 and int(facecam[5]) > 0 else PIP_MARGIN
-            base_chain = (f"[0:v]fps={config.OUT_FPS},split=2[base][fc];"
+            pip_h = max(2, int(round(pip_w * fh / fw / 2)) * 2)
+            ox = int(facecam[4]) if len(facecam) >= 6 and int(facecam[4]) > 0 else (cur_w - pip_w - pip_margin)
+            oy = int(facecam[5]) if len(facecam) >= 6 and int(facecam[5]) > 0 else pip_margin
+            base_chain = (f"[0:v]fps={target_fps},split=2[base][fc];"
                           f"[base]scale={cur_w}:{cur_h}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h},setsar=1[b];"
-                          f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={PIP_W}:{pip_h},setsar=1[p];"
+                          f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={pip_w}:{pip_h},setsar=1[p];"
                           f"[b][p]overlay={ox}:{oy}[v_raw];")
-            return base_chain + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
-    fill = f"[0:v]fps={config.OUT_FPS},scale={cur_w}:{cur_h}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h}"
+            return base_chain + (f"[v_raw]{post_vf}[v0];" if post_vf else "[v_raw]copy[v0];")
+    fill = f"[0:v]fps={target_fps},scale={cur_w}:{cur_h}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h}"
     if layout in ("crop", "landscape", "square") or (layout in ("gameplay", "pip") and not facecam):
         core = fill + ",setsar=1[v_raw];"
     elif layout == "left":
@@ -941,36 +1002,41 @@ def _filter(layout, fg_h, facecam=None, video_filter=None, out_w=None, out_h=Non
     elif layout == "right":
         core = fill + ":in_w-out_w:0,setsar=1[v_raw];"
     elif layout == "fit":
-        core = (f"[0:v]fps={config.OUT_FPS},scale={cur_w}:{cur_h}:force_original_aspect_ratio=decrease,"
+        core = (f"[0:v]fps={target_fps},scale={cur_w}:{cur_h}:force_original_aspect_ratio=decrease,"
                 f"pad={cur_w}:{cur_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[v_raw];")
     elif layout == "split":
         half = f"scale={cur_w}:{cur_h // 2}:force_original_aspect_ratio=increase,crop={cur_w}:{cur_h // 2}"
         if facecam and len(facecam) >= 4 and int(facecam[2]) > 8 and int(facecam[3]) > 8:
             fx, fy, fw, fh = (int(facecam[i]) for i in range(4))
-            core = (f"[0:v]fps={config.OUT_FPS},split=2[fc][main];"
+            core = (f"[0:v]fps={target_fps},split=2[fc][main];"
                     f"[fc]crop={fw}:{fh}:{fx}:{fy},{half}[t];"
                     f"[main]{half}[u];[t][u]vstack,setsar=1[v_raw];")
         else:
-            core = (f"[0:v]fps={config.OUT_FPS},split=2[l][r];[l]crop=iw/2:ih:0:0,{half}[t];"
+            core = (f"[0:v]fps={target_fps},split=2[l][r];[l]crop=iw/2:ih:0:0,{half}[t];"
                     f"[r]crop=iw/2:ih:iw/2:0,{half}[u];[t][u]vstack,setsar=1[v_raw];")
     else:
         blur_cmd = blur_filter if blur_filter is not None else _tools.get_best_blur_filter()
         blur_segment = f"{blur_cmd}," if blur_cmd else ""
         dim_cmd = _tools.get_bg_dim_filter()
         dim_segment = f",{dim_cmd}" if dim_cmd else ""
-        core = (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
+        core = (f"[0:v]fps={target_fps},split=2[a][b];"
                 f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,{blur_segment}"
                 f"scale={cur_w}:{cur_h}{dim_segment}[bg];"
                 f"[b]scale={cur_w}:{fg_h}:force_original_aspect_ratio=increase,crop={cur_w}:{fg_h}[fg];"
                 f"[bg][fg]overlay=0:({cur_h}-h)/2,setsar=1[v_raw];")
-    return core + (f"[v_raw]{vf}[v0];" if vf else "[v_raw]copy[v0];")
+    return core + (f"[v_raw]{post_vf}[v0];" if post_vf else "[v_raw]copy[v0];")
 
 
-def _hook_y(layout, hook_y, facecam=None):
+def _hook_y(layout, hook_y, facecam=None, out_w=None, out_h=None):
     """Where the heading goes. In the gameplay layout the webcam sits in the top corner, so a heading
     across the top would run under it: it goes just below the picture instead."""
     if layout in ("gameplay", "pip") and facecam and len(facecam) >= 4 and facecam[2] > 8:
-        return PIP_MARGIN + int(round(PIP_W * facecam[3] / facecam[2])) + 32
+        cur_w = out_w or (get_dimensions(layout)[0] if layout in LAYOUTS else W)
+        cur_h = out_h or (get_dimensions(layout)[1] if layout in LAYOUTS else H)
+        scale_ratio = min(cur_w, cur_h) / W
+        pip_w = max(120, int(round(PIP_W * scale_ratio / 2)) * 2)
+        pip_margin = max(12, int(round(PIP_MARGIN * scale_ratio)))
+        return pip_margin + int(round(pip_w * facecam[3] / facecam[2])) + max(18, int(round(32 * scale_ratio)))
     return hook_y
 
 
@@ -1013,12 +1079,19 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
-    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), clip.get("safe_margin"))
-    cur_w, cur_h = get_dimensions(layout)
+    clip_quality = clip.get("quality")
+    try:
+        clip_fps = int(clip["fps"]) if clip.get("fps") else config.OUT_FPS
+        clip_fps = max(15, min(60, clip_fps))
+    except (TypeError, ValueError):
+        clip_fps = config.OUT_FPS
+    clip_transition = str(clip.get("transition") or "none").lower()
+    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), clip.get("safe_margin"), quality=clip_quality)
+    cur_w, cur_h = get_dimensions(layout, quality=clip_quality)
     face = _normalize_facecam(clip.get("facecam"), src_w, src_h, out_w=cur_w, out_h=cur_h)
     if layout == "pip" and not (face and len(face) >= 4):
         face = _normalize_facecam([10, 10, 40, 40, 0, 0], src_w, src_h, out_w=cur_w, out_h=cur_h)
-    hook_y = _hook_y(layout, hook_y, face)
+    hook_y = _hook_y(layout, hook_y, face, out_w=cur_w, out_h=cur_h)
     text_overlays = clip.get("text_overlays") or []
     stickers = clip.get("stickers") or []
     v_filter = clip.get("filter")
@@ -1042,13 +1115,14 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
         meta = {"title": clip.get("title") or "", "description": clip.get("description") or "", "comment": clip.get("description") or ""}
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, meta=meta,
                           video_filter=v_filter, volume=vol, muted=muted, out_w=cur_w, out_h=cur_h,
-                          captions_requested=captions_requested)
+                          captions_requested=captions_requested, fps=clip_fps, transition=clip_transition)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, meta=None,
-               video_filter=None, volume=1.0, muted=False, out_w=None, out_h=None, captions_requested: bool = True) -> dict:
+               video_filter=None, volume=1.0, muted=False, out_w=None, out_h=None, captions_requested: bool = True,
+               fps=None, transition=None) -> dict:
     global _qsv_ok
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = _safe_work_stem(name)
@@ -1073,6 +1147,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
 
     _ensure_render_fonts(fonts_dir, required_fonts=_required_fonts_for_ass(ass) if has_events else None)
 
+    dur = max(0.0, float(end) - float(start))
     sub_env = None
     if has_events:
         if not ass_path.is_file() or ass_path.stat().st_size == 0:
@@ -1081,9 +1156,11 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         sub_env = _build_ffmpeg_subtitle_env(work, conf_path)
         esc_ass = escape_ffmpeg_filter_value(f"{safe_name}.ass")
         esc_fonts = escape_ffmpeg_filter_value("f")
-        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + f"[v0]ass={esc_ass}:fontsdir={esc_fonts}[v]"
+        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h,
+                     fps=fps, transition=transition, duration=dur) + f"[v0]ass={esc_ass}:fontsdir={esc_fonts}[v]"
     else:
-        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h) + "[v0]copy[v]"
+        fc = _filter(layout, fg_h, face, video_filter=video_filter, out_w=out_w, out_h=out_h,
+                     fps=fps, transition=transition, duration=dur) + "[v0]copy[v]"
 
     if muted or volume <= 0.001:
         af_chain = "volume=0"
@@ -1091,6 +1168,10 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         af_chain = f"loudnorm=I=-14:TP=-1.5:LRA=11,volume={volume:.2f}"
     else:
         af_chain = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    if str(transition or "").lower() == "fade" and dur > 1.0 and not muted and volume > 0.001:
+        if not _tools.get_supported_filters() or _tools.has_filter("afade"):
+            fade_out_a = max(0.0, dur - 0.30)
+            af_chain += f",afade=t=in:st=0:d=0.30,afade=t=out:st={fade_out_a:.2f}:d=0.30"
 
     base = [_tools.get_ffmpeg(), "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", af_chain,

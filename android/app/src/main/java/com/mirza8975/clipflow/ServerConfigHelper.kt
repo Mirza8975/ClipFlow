@@ -40,6 +40,20 @@ class ServerConfigHelper(private val context: Context) {
 
             return targetPort == basePort
         }
+
+        /**
+         * Returns true when [url] is blank or targets the embedded on-device loopback engine.
+         */
+        fun isLocalEngineUrl(url: String?): Boolean {
+            val raw = url?.trim() ?: return true
+            if (raw.isEmpty()) return true
+            val host = try {
+                Uri.parse(raw).host?.lowercase()
+            } catch (_: Exception) {
+                null
+            } ?: return false
+            return host == "127.0.0.1" || host == "localhost" || host == "::1"
+        }
     }
 
     private val client = OkHttpClient.Builder()

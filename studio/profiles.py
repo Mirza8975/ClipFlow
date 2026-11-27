@@ -189,9 +189,11 @@ def _twitch_profile(url: str):
 def _ydl_info(url: str) -> dict:
     """Live details from yt-dlp without downloading anything (no formats are fetched)."""
     import yt_dlp
+    from . import media, tools
     from .live import _Quiet
     with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
-                           "logger": _Quiet(), "socket_timeout": 10}) as y:
+                           "logger": _Quiet(), "socket_timeout": 10,
+                           **tools.ydl_runtime_opts(), **media.cookie_opts()}) as y:
         return y.extract_info(url, download=False) or {}
 
 
