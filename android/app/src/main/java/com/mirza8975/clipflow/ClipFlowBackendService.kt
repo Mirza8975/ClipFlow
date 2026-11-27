@@ -203,7 +203,7 @@ class ClipFlowBackendService : Service() {
             // 1. Prepare directories in app-private storage
             val dataDir = File(filesDir, "data").apply { mkdirs() }
             val webDir = File(filesDir, "web")
-            val binDir = File(dataDir, "bin").apply { mkdirs() }
+            File(dataDir, "bin").mkdirs()
             File(dataDir, "models").mkdirs()
             File(dataDir, "tmp").mkdirs()
             File(dataDir, "fonts").mkdirs()

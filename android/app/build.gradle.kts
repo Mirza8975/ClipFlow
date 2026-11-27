@@ -33,16 +33,25 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystorePath = project.findProperty("android.injected.signing.store.file") as? String
-                ?: System.getenv("KEYSTORE_FILE")
-            if (keystorePath != null && file(keystorePath).exists()) {
+            val keystorePath = (project.findProperty("android.injected.signing.store.file") as? String
+                ?: System.getenv("KEYSTORE_FILE"))?.trim()
+            val resolvedStorePassword = (project.findProperty("android.injected.signing.store.password") as? String
+                ?: System.getenv("KEYSTORE_PASSWORD"))?.trim()
+            val resolvedKeyAlias = (project.findProperty("android.injected.signing.key.alias") as? String
+                ?: System.getenv("KEY_ALIAS"))?.trim()
+            val resolvedKeyPassword = (project.findProperty("android.injected.signing.key.password") as? String
+                ?: System.getenv("KEY_PASSWORD"))?.trim()
+
+            if (!keystorePath.isNullOrEmpty() &&
+                file(keystorePath).isFile &&
+                !resolvedStorePassword.isNullOrEmpty() &&
+                !resolvedKeyAlias.isNullOrEmpty() &&
+                !resolvedKeyPassword.isNullOrEmpty()
+            ) {
                 storeFile = file(keystorePath)
-                storePassword = project.findProperty("android.injected.signing.store.password") as? String
-                    ?: System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = project.findProperty("android.injected.signing.key.alias") as? String
-                    ?: System.getenv("KEY_ALIAS")
-                keyPassword = project.findProperty("android.injected.signing.key.password") as? String
-                    ?: System.getenv("KEY_PASSWORD")
+                storePassword = resolvedStorePassword
+                keyAlias = resolvedKeyAlias
+                keyPassword = resolvedKeyPassword
             }
         }
     }
@@ -56,10 +65,15 @@ android {
                 "proguard-rules.pro"
             )
             val releaseSigning = signingConfigs.getByName("release")
-            if (releaseSigning.storeFile != null) {
+            val hasCompleteReleaseSigning = releaseSigning.storeFile != null &&
+                !releaseSigning.storePassword.isNullOrEmpty() &&
+                !releaseSigning.keyAlias.isNullOrEmpty() &&
+                !releaseSigning.keyPassword.isNullOrEmpty()
+            if (hasCompleteReleaseSigning) {
                 signingConfig = releaseSigning
             }
-            // When releaseSigning.storeFile is not set, Gradle builds an unsigned release APK (app-release-unsigned.apk)
+            // When complete release signing credentials are absent, Gradle emits an unsigned APK
+            // (app-release-unsigned.apk) and never falls back to the debug key.
         }
         debug {
             applicationIdSuffix = ".debug"

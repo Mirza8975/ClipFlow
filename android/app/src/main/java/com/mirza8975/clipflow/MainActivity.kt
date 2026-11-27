@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         } else if (!granted && pending != null) {
             Toast.makeText(
                 this,
-                "Storage permission is required to save clips into Downloads on this Android version",
+                "Storage permission is required to save downloaded files on this Android version",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -888,21 +888,34 @@ class MainActivity : AppCompatActivity() {
                         safeName
                     }
                     val mime = resolveMimeType(finalName, resp.header("Content-Type"), mimetype)
+                    val isVideoDownload = mime.startsWith("video/", ignoreCase = true) ||
+                        finalName.endsWith(".mp4", ignoreCase = true)
+                    val folderLabel = if (isVideoDownload) "Movies/ClipFlow" else "Downloads/ClipFlow"
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         val resolver = contentResolver
+                        val collectionUri = if (isVideoDownload) {
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        } else {
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        }
+                        val relativePath = if (isVideoDownload) {
+                            "${Environment.DIRECTORY_MOVIES}/ClipFlow"
+                        } else {
+                            "${Environment.DIRECTORY_DOWNLOADS}/ClipFlow"
+                        }
                         val values = ContentValues().apply {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
                             put(MediaStore.MediaColumns.MIME_TYPE, mime)
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ClipFlow")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
                             put(MediaStore.MediaColumns.IS_PENDING, 1)
                         }
-                        val itemUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                            ?: throw IllegalStateException("Could not create file in Downloads")
+                        val itemUri = resolver.insert(collectionUri, values)
+                            ?: throw IllegalStateException("Could not create file in $folderLabel")
                         try {
                             resolver.openOutputStream(itemUri)?.use { out ->
                                 body.byteStream().copyTo(out)
-                            } ?: throw IllegalStateException("Could not open Downloads stream")
+                            } ?: throw IllegalStateException("Could not open $folderLabel stream")
                             val readyValues = ContentValues().apply {
                                 put(MediaStore.MediaColumns.IS_PENDING, 0)
                             }
@@ -911,12 +924,13 @@ class MainActivity : AppCompatActivity() {
                             resolver.delete(itemUri, null, null)
                             throw t
                         }
+                        "$folderLabel: $finalName"
                     } else {
                         @Suppress("DEPRECATION")
-                        val dir = File(
-                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                            "ClipFlow"
-                        ).apply { mkdirs() }
+                        val baseDir = Environment.getExternalStoragePublicDirectory(
+                            if (isVideoDownload) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_DOWNLOADS
+                        )
+                        val dir = File(baseDir, "ClipFlow").apply { mkdirs() }
                         var dest = File(dir, finalName)
                         if (dest.exists()) {
                             val dot = finalName.lastIndexOf('.')
@@ -937,14 +951,14 @@ class MainActivity : AppCompatActivity() {
                             arrayOf(mime),
                             null
                         )
+                        "$folderLabel: ${dest.name}"
                     }
-                    finalName
                 }
             }
         }
 
-        result.onSuccess { savedName ->
-            Toast.makeText(this, "Saved to Downloads/ClipFlow: $savedName", Toast.LENGTH_LONG).show()
+        result.onSuccess { savedLocation ->
+            Toast.makeText(this, "Saved to $savedLocation", Toast.LENGTH_LONG).show()
         }.onFailure { err ->
             val msg = if (err is SecurityException) {
                 err.message ?: "Download blocked: cross-origin redirect detected"

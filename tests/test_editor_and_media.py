@@ -21,11 +21,11 @@ for mod in submodules:
         except ImportError:
             sys.modules[mod] = MagicMock()
 
-if "yt_dlp" in sys.modules and not hasattr(sys.modules["yt_dlp"], "utils"):
+if isinstance(sys.modules.get("yt_dlp"), MagicMock) and not hasattr(sys.modules["yt_dlp"], "utils"):
     sys.modules["yt_dlp"].utils = sys.modules.get("yt_dlp.utils", MagicMock())
-if "yt_dlp.utils" in sys.modules and not hasattr(sys.modules["yt_dlp.utils"], "download_range_func"):
+if isinstance(sys.modules.get("yt_dlp.utils"), MagicMock) and not hasattr(sys.modules["yt_dlp.utils"], "download_range_func"):
     sys.modules["yt_dlp.utils"].download_range_func = MagicMock(return_value=lambda *args, **kwargs: None)
-if "fastapi" in sys.modules:
+if isinstance(sys.modules.get("fastapi"), MagicMock):
     for sub in ["concurrency", "responses", "staticfiles"]:
         if not hasattr(sys.modules["fastapi"], sub):
             setattr(sys.modules["fastapi"], sub, sys.modules.get(f"fastapi.{sub}", MagicMock()))
@@ -2101,7 +2101,8 @@ class TestProductFinishingRegressions(unittest.TestCase):
             with patch("studio.render.subprocess.run", side_effect=fake_subproc), \
                  patch("studio.render.run"), \
                  patch.object(tools, "get_render_encoder_candidates", return_value=[("sw", ["yuv420p", "-c:v", "mpeg4"])]), \
-                 patch.object(tools, "has_ass_filter", return_value=True):
+                 patch.object(tools, "has_ass_filter", return_value=True), \
+                 patch.object(tools, "has_filter", return_value=True):
                 (work / "c1.jpg").write_bytes(b"jpg")
                 render._render_in(work, src, out_d, "c1", 0.0, 5.0, "blur", 608, ass_1080, out_w=720, out_h=1280, fps=60, transition="fade")
             cmd_str = " ".join(captured_cmds[0])
@@ -2210,8 +2211,36 @@ class TestProductFinishingRegressions(unittest.TestCase):
         self.assertTrue((root / "android" / "app" / "src" / "main" / "res" / "xml" / "file_paths.xml").is_file())
         main_kt = (root / "android" / "app" / "src" / "main" / "java" / "com" / "mirza8975" / "clipflow" / "MainActivity.kt").read_text(encoding="utf-8")
         self.assertIn("ClipFlowAndroidBridge", main_kt)
+        self.assertIn("MediaStore.Video", main_kt)
         self.assertIn("MediaStore.Downloads", main_kt)
+        self.assertIn("DIRECTORY_MOVIES", main_kt)
         self.assertIn("ServerConfigHelper.isLocalEngineUrl", main_kt)
+
+    def test_ci_runner_coverage_signing_and_release_network_security(self):
+        import re
+        import xml.etree.ElementTree as ET
+        root = Path(__file__).resolve().parent.parent
+
+        # 1. Every test_*.py module must be registered in tests/run.py
+        run_src = (root / "tests" / "run.py").read_text(encoding="utf-8")
+        discovered = sorted(p.relative_to(root).as_posix() for p in (root / "tests").glob("test_*.py"))
+        configured = set(re.findall(r'"(tests/test_[^"]+\.py)"', run_src))
+        self.assertEqual(sorted(set(discovered) - configured), [])
+
+        # 2. Release network_security_config must block arbitrary cleartext and only allow 127.0.0.1 & localhost
+        rel_net = ET.fromstring((root / "android" / "app" / "src" / "main" / "res" / "xml" / "network_security_config.xml").read_text(encoding="utf-8"))
+        self.assertIsNone(rel_net.find("debug-overrides"))
+        base = rel_net.find("base-config")
+        self.assertIsNotNone(base)
+        self.assertEqual(base.attrib.get("cleartextTrafficPermitted"), "false")
+        domains = sorted((d.text or "").strip() for d in rel_net.findall("./domain-config/domain"))
+        self.assertEqual(domains, ["127.0.0.1", "localhost"])
+
+        # 3. Release URL validator and Gradle signing checks stay strict
+        helper_kt = (root / "android" / "app" / "src" / "main" / "java" / "com" / "mirza8975" / "clipflow" / "ServerConfigHelper.kt").read_text(encoding="utf-8")
+        self.assertIn("!BuildConfig.DEBUG", helper_kt)
+        gradle_kts = (root / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+        self.assertIn("hasCompleteReleaseSigning", gradle_kts)
 
 
 if __name__ == "__main__":
