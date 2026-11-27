@@ -136,6 +136,147 @@ find_readelf() {
   return 1
 }
 
+assert_defined_symbols() {
+  local target="$1"
+  local label="$2"
+  shift 2
+  if [[ $# -eq 0 ]]; then
+    echo "ERROR: assert_defined_symbols requires at least one symbol for $label" >&2
+    return 1
+  fi
+  if [[ ! -s "$target" ]]; then
+    echo "ERROR: Expected binary/archive missing or empty: $target ($label)" >&2
+    return 1
+  fi
+
+  # Capture nm output fully before matching so early grep exits never trigger SIGPIPE under pipefail.
+  local sym_dump wanted
+  sym_dump="$("$NM" --defined-only -g "$target")" || {
+    echo "ERROR: Failed to inspect symbols of $label ($target) with $NM" >&2
+    return 1
+  }
+  wanted="$(printf '%s ' "$@")"
+
+  local missing
+  missing="$(LC_ALL=C awk -v wanted="$wanted" '
+    BEGIN {
+      n = split(wanted, req, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        if (req[i] != "") want[req[i]] = 1
+      }
+    }
+    NF == 3 && $1 ~ /^[0-9A-Fa-f]+$/ && $2 ~ /^[A-Za-z]$/ && $2 !~ /^[Uwv?]$/ {
+      if ($3 in want) {
+        found[$3] = 1
+      }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        s = req[i]
+        if (s != "" && !(s in found)) {
+          print s
+        }
+      }
+    }
+  ' <<< "$sym_dump")"
+
+  if [[ -n "$missing" ]]; then
+    echo "ERROR: $label ($target) missing defined global symbol(s):" >&2
+    while IFS= read -r sym_name; do
+      [[ -n "$sym_name" ]] && printf '  - %s\n' "$sym_name" >&2
+    done <<< "$missing"
+    return 1
+  fi
+}
+
+verify_static_archive() {
+  local archive="$1"
+  local label="$2"
+  shift 2
+  if [[ ! -s "$archive" ]]; then
+    echo "ERROR: Expected static archive missing or empty: $archive ($label)" >&2
+    return 1
+  fi
+
+  local elf_hdrs elf_summary
+  elf_hdrs="$("$READELF" -h "$archive")" || {
+    echo "ERROR: Failed to inspect ELF headers of $label ($archive) with $READELF" >&2
+    return 1
+  }
+
+  elf_summary="$(LC_ALL=C awk '
+    /^[[:space:]]*Class:/ {
+      classes++
+      if ($2 != "ELF64") bad_class++
+    }
+    /^[[:space:]]*Machine:/ {
+      machines++
+      if ($2 != "AArch64") bad_machine++
+    }
+    /^[[:space:]]*Type:/ {
+      types++
+      if ($2 != "REL") bad_type++
+    }
+    END {
+      ok = (classes >= 1 && machines == classes && types == classes && bad_class == 0 && bad_machine == 0 && bad_type == 0)
+      printf("%d %d %d %d %d\n", ok ? 1 : 0, classes + 0, bad_class + 0, bad_machine + 0, bad_type + 0)
+    }
+  ' <<< "$elf_hdrs")"
+
+  local ok_flag obj_count bad_class bad_machine bad_type
+  read -r ok_flag obj_count bad_class bad_machine bad_type <<< "$elf_summary"
+  if [[ "$ok_flag" -ne 1 ]]; then
+    echo "ERROR: $label failed ARM64 ELF relocatable archive verification (objects=${obj_count}, bad_class=${bad_class}, bad_machine=${bad_machine}, bad_type=${bad_type})" >&2
+    return 1
+  fi
+
+  assert_defined_symbols "$archive" "$label" "$@"
+}
+
+assert_pkg_config_static_libs() {
+  local pkg="$1"
+  shift
+  local static_cflags_libs static_libs
+  static_cflags_libs="$(pkg-config --static --cflags --libs "$pkg")" || {
+    echo "ERROR: pkg-config --static --cflags --libs failed for '$pkg'" >&2
+    return 1
+  }
+  static_libs="$(pkg-config --static --libs "$pkg")" || {
+    echo "ERROR: pkg-config --static --libs failed for '$pkg'" >&2
+    return 1
+  }
+  echo "${pkg}.pc static flags: ${static_cflags_libs}"
+
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+
+  local wanted missing
+  wanted="$(printf '%s ' "$@")"
+  missing="$(LC_ALL=C awk -v wanted="$wanted" -v hay="$static_libs" '
+    BEGIN {
+      nh = split(hay, htok, /[[:space:]]+/)
+      for (i = 1; i <= nh; i++) {
+        if (htok[i] != "") present[htok[i]] = 1
+      }
+      nr = split(wanted, req, /[[:space:]]+/)
+      for (i = 1; i <= nr; i++) {
+        if (req[i] != "" && !(req[i] in present)) {
+          print req[i]
+        }
+      }
+    }
+  ')"
+
+  if [[ -n "$missing" ]]; then
+    echo "ERROR: Expected transitive static flag(s) missing in ${pkg}.pc output ($static_libs):" >&2
+    while IFS= read -r flag_name; do
+      [[ -n "$flag_name" ]] && printf '  - %s\n' "$flag_name" >&2
+    done <<< "$missing"
+    return 1
+  fi
+}
+
 verify_binary_artifacts() {
   local out_dir="$1"
   local readelf_bin="$2"
@@ -159,7 +300,7 @@ verify_binary_artifacts() {
     elf_machine="$("$readelf_bin" -h "$bin" | awk '/Machine:/ {print $2}')"
     elf_type="$("$readelf_bin" -h "$bin" | awk '/Type:/ {print $2}')"
     phdrs_out="$("$readelf_bin" -lW "$bin")"
-    interp="$(grep -o "/system/bin/linker64" <<< "$phdrs_out" | head -n 1 || true)"
+    interp="$(awk '/\/system\/bin\/linker64/ {res="/system/bin/linker64"} END {print res}' <<< "$phdrs_out")"
 
     echo "Verified ELF ($(basename "$bin")): Class=$elf_class, Machine=$elf_machine, Type=$elf_type, Interp=$interp, Size=${size_bytes}B"
     if [[ "$elf_class" != "ELF64" || "$elf_machine" != "AArch64" || "$elf_type" != "DYN" || "$interp" != "/system/bin/linker64" ]]; then
@@ -271,7 +412,7 @@ if [[ "$VERIFY_ONLY" -eq 1 ]]; then
   NDK_MAYBE="$(resolve_ndk || true)"
   TOOLCHAIN_MAYBE=""
   if [[ -n "$NDK_MAYBE" ]]; then
-    TOOLCHAIN_MAYBE="$(find "$NDK_MAYBE/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    TOOLCHAIN_MAYBE="$(find "$NDK_MAYBE/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d | sort | awk 'NR == 1 {print}')"
   fi
   READELF_BIN="$(find_readelf "$TOOLCHAIN_MAYBE")" || {
     echo "ERROR: Could not locate llvm-readelf or readelf for verification." >&2
@@ -287,7 +428,7 @@ verify_meson_version() {
   local meson_bin="${1:-meson}"
   local min_ver="${2:-$MIN_MESON_VERSION}"
   local actual_ver
-  actual_ver="$("$meson_bin" --version | head -n 1 | tr -d '[:space:]')"
+  actual_ver="$("$meson_bin" --version | awk 'NR == 1 {gsub(/[[:space:]]/, "", $0); print}')"
   python3 - "$actual_ver" "$min_ver" <<'PY'
 import re, sys
 
@@ -324,7 +465,7 @@ HOST_TAG=""
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HOST_TAG="linux-x86_64" ;;
   Darwin-arm64|Darwin-x86_64) HOST_TAG="darwin-x86_64" ;;
-  *) HOST_TAG="$(basename "$(find "$NDK_DIR/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d | head -n 1)")" ;;
+  *) HOST_TAG="$(basename "$(find "$NDK_DIR/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d | sort | awk 'NR == 1 {print}')")" ;;
 esac
 
 TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG"
@@ -466,6 +607,8 @@ extract_tarball "$EXPAT_ARCHIVE"
   make -j"$JOBS"
   make install
 )
+assert_pkg_config_static_libs expat -lexpat
+verify_static_archive "$PREFIX/lib/libexpat.a" "libexpat.a" XML_ParserCreate
 
 # 2. libpng (required by FreeType for Android NotoColorEmoji CBDT/CBLC bitmap PNG glyphs)
 fetch_and_verify "$LIBPNG_ARCHIVE" "$LIBPNG_URL" "$LIBPNG_SHA256"
@@ -484,11 +627,10 @@ extract_tarball "$LIBPNG_ARCHIVE"
   make -j"$JOBS"
   make install
 )
-echo "libpng.pc static flags: $(pkg-config --static --cflags --libs libpng)"
-"$NM" --defined-only -g "$PREFIX/lib/libpng16.a" | grep -Eq "[[:space:]]png_create_read_struct$" || {
-  echo "ERROR: libpng16.a missing png_create_read_struct!" >&2
-  exit 1
-}
+assert_pkg_config_static_libs libpng -lpng16 -lz
+verify_static_archive "$PREFIX/lib/libpng16.a" "libpng16.a" \
+  png_create_read_struct png_destroy_read_struct png_create_info_struct \
+  png_read_info png_read_image png_read_end png_get_IHDR png_set_read_fn
 
 # 3. FreeType (font rasterizer with zlib + libpng bitmap emoji support)
 fetch_and_verify "$FREETYPE_ARCHIVE" "$FREETYPE_URL" "$FREETYPE_SHA256"
@@ -511,12 +653,18 @@ extract_tarball "$FREETYPE_ARCHIVE"
   make -j"$JOBS"
   make install
 )
-FT_OPTION_H="$(find "$PREFIX/include" -name ftoption.h | head -n 1)"
+FT_OPTION_H="$(find "$PREFIX/include" -name ftoption.h | sort | awk 'NR == 1 {print}')"
 if [[ -z "$FT_OPTION_H" ]] || ! grep -Eq "^#define[[:space:]]+FT_CONFIG_OPTION_USE_PNG" "$FT_OPTION_H"; then
   echo "ERROR: FreeType was built without FT_CONFIG_OPTION_USE_PNG enabled!" >&2
   exit 1
 fi
-echo "freetype2.pc static flags: $(pkg-config --static --cflags --libs freetype2)"
+if ! grep -Eq "^#define[[:space:]]+FT_CONFIG_OPTION_SYSTEM_ZLIB" "$FT_OPTION_H"; then
+  echo "ERROR: FreeType was built without FT_CONFIG_OPTION_SYSTEM_ZLIB enabled!" >&2
+  exit 1
+fi
+assert_pkg_config_static_libs freetype2 -lfreetype -lpng16 -lz
+verify_static_archive "$PREFIX/lib/libfreetype.a" "libfreetype.a" \
+  FT_Init_FreeType FT_New_Face FT_Load_Glyph
 
 # 4. FriBidi (bidirectional script layout)
 fetch_and_verify "$FRIBIDI_ARCHIVE" "$FRIBIDI_URL" "$FRIBIDI_SHA256"
@@ -536,6 +684,9 @@ extract_tarball "$FRIBIDI_ARCHIVE"
   ninja -C build-android -j"$JOBS"
   ninja -C build-android install
 )
+assert_pkg_config_static_libs fribidi -lfribidi
+verify_static_archive "$PREFIX/lib/libfribidi.a" "libfribidi.a" \
+  fribidi_get_bidi_types fribidi_log2vis
 
 # 5. HarfBuzz (complex text shaping; inspect pthread vs C++ ABI linkage empirically)
 fetch_and_verify "$HARFBUZZ_ARCHIVE" "$HARFBUZZ_URL" "$HARFBUZZ_SHA256"
@@ -571,7 +722,9 @@ extract_tarball "$HARFBUZZ_ARCHIVE"
     echo "WARNING: HarfBuzz built without HAVE_PTHREAD; C++ std::mutex may require static libc++." >&2
   }
 )
-echo "harfbuzz.pc static flags: $(pkg-config --static --cflags --libs harfbuzz)"
+assert_pkg_config_static_libs harfbuzz -lharfbuzz -lfreetype -lpng16 -lz
+verify_static_archive "$PREFIX/lib/libharfbuzz.a" "libharfbuzz.a" \
+  hb_buffer_create hb_ft_font_create
 
 detect_archive_external_cxx_symbols() {
   local archive="$1"
@@ -629,10 +782,11 @@ else
   FFMPEG_LD_ARGS=(--ld="$CXX" --extra-ldflags="-L$PREFIX/lib -static-libstdc++ -Wl,-z,max-page-size=16384")
   # shellcheck disable=SC2086
   "$CXX" -fPIE -pie -static-libstdc++ "$WORK_DIR/hb_c_probe.c" $HB_STATIC_FLAGS -lm -o "$WORK_DIR/hb_c_probe"
-  "$READELF" -d "$WORK_DIR/hb_c_probe" | grep -q "libc++_shared.so" && {
+  hb_probe_dynamic="$("$READELF" -d "$WORK_DIR/hb_c_probe")"
+  if grep -Fq "libc++_shared.so" <<< "$hb_probe_dynamic"; then
     echo "ERROR: Probe binary dynamically linked libc++_shared.so!" >&2
     exit 1
-  }
+  fi
 fi
 rm -f "$WORK_DIR/hb_c_probe.c" "$WORK_DIR/hb_c_probe"
 
@@ -721,14 +875,8 @@ FC_STAGE="$WORK_DIR/fontconfig-stage"
   ninja -C build-android -j"$JOBS"
   stage_fontconfig_devel build-android "$PREFIX" "$FC_STAGE"
 )
-FC_STATIC_LIBS="$(pkg-config --static --libs fontconfig)"
-echo "fontconfig.pc static flags: $(pkg-config --static --cflags --libs fontconfig)"
-for needed_flag in -lfontconfig -lexpat -lfreetype -lpng16 -lz; do
-  if ! grep -Fq -- "$needed_flag" <<< "$FC_STATIC_LIBS"; then
-    echo "ERROR: Expected transitive static flag '$needed_flag' missing in fontconfig pkg-config output: $FC_STATIC_LIBS" >&2
-    exit 1
-  fi
-done
+assert_pkg_config_static_libs fontconfig -lfontconfig -lexpat -lfreetype -lpng16 -lz
+verify_static_archive "$PREFIX/lib/libfontconfig.a" "libfontconfig.a" FcInit FcConfigCreate
 
 # 7. libunibreak (Unicode line breaking for libass 0.17.4)
 fetch_and_verify "$LIBUNIBREAK_ARCHIVE" "$LIBUNIBREAK_URL" "$LIBUNIBREAK_SHA256"
@@ -746,6 +894,8 @@ extract_tarball "$LIBUNIBREAK_ARCHIVE"
   make -j"$JOBS"
   make install
 )
+assert_pkg_config_static_libs libunibreak -lunibreak
+verify_static_archive "$PREFIX/lib/libunibreak.a" "libunibreak.a" init_linebreak set_linebreaks_utf32
 
 # 8. libass (ASS/SSA subtitle renderer + Fontconfig + HarfBuzz + FriBidi + FreeType + libpng + libunibreak)
 fetch_and_verify "$LIBASS_ARCHIVE" "$LIBASS_URL" "$LIBASS_SHA256"
@@ -771,13 +921,9 @@ extract_tarball "$LIBASS_ARCHIVE"
 )
 
 LIBASS_STATIC_LIBS="$(pkg-config --static --libs libass)"
-echo "Resolved static libass flags: $(pkg-config --static --cflags --libs libass)"
-for needed_flag in -lass -lfontconfig -lexpat -lunibreak -lharfbuzz -lfreetype -lpng16 -lfribidi -lz -lm; do
-  if ! grep -Fq -- "$needed_flag" <<< "$LIBASS_STATIC_LIBS"; then
-    echo "ERROR: Expected transitive static flag '$needed_flag' missing in libass pkg-config output: $LIBASS_STATIC_LIBS" >&2
-    exit 1
-  fi
-done
+assert_pkg_config_static_libs libass \
+  -lass -lfontconfig -lexpat -lunibreak -lharfbuzz -lfreetype -lpng16 -lfribidi -lz -lm
+verify_static_archive "$PREFIX/lib/libass.a" "libass.a" ass_library_init ass_process_chunk
 
 # 8. FFmpeg (pinned tag n8.1.1 -> exact commit)
 FFMPEG_SRC="$SRC_DIR/ffmpeg-${FFMPEG_VERSION}"
@@ -932,16 +1078,9 @@ git clone --depth 1 --branch "$FFMPEG_TAG" "$FFMPEG_GIT_URL" "$FFMPEG_SRC"
   done
 
   # Assert static subtitle, font, and PNG emoji dependency symbols in unstripped ffmpeg_g
-  ffmpeg_sym_dump="$("$NM" --defined-only -g ffmpeg_g)"
-  for sym in \
+  assert_defined_symbols ffmpeg_g "ffmpeg_g" \
     ass_library_init ass_process_chunk FcInit hb_buffer_create fribidi_get_bidi_types \
     FT_Init_FreeType png_create_read_struct init_linebreak set_linebreaks_utf32 XML_ParserCreate
-  do
-    if ! grep -Eq "[[:space:]]${sym}$" <<< "$ffmpeg_sym_dump"; then
-      echo "ERROR: Expected statically linked symbol '$sym' missing in ffmpeg_g!" >&2
-      exit 1
-    fi
-  done
 
   "$STRIP" --strip-unneeded -o "$OUTPUT_DIR/libffmpeg.so" ffmpeg_g
   "$STRIP" --strip-unneeded -o "$OUTPUT_DIR/libffprobe.so" ffprobe_g
@@ -957,7 +1096,7 @@ ffmpeg_version=${FFMPEG_VERSION}
 ffmpeg_tag=${FFMPEG_TAG}
 ffmpeg_commit=${FFMPEG_COMMIT}
 api_level=${API_LEVEL}
-meson_version=$(meson --version | head -n 1)
+meson_version=$(meson --version | awk 'NR == 1 {print}')
 harfbuzz_cxx_runtime=${HARFBUZZ_CXX_RUNTIME}
 expat=${EXPAT_VERSION} sha256=${EXPAT_SHA256}
 libpng=${LIBPNG_VERSION} sha256=${LIBPNG_SHA256}
